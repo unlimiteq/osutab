@@ -3,17 +3,20 @@
 
 use std::io::{self, BufRead, BufReader, ErrorKind, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::mapping::{AreaMm, Rotation, TABLET_LONG_MM};
 use crate::settings::{Output, Settings, MIN_AREA_MM};
+use crate::theme::Rgb;
 use crate::shared::{LiveConfig, Shared};
 
 pub const APP_PORT: u16 = 27192;
 const POLL: Duration = Duration::from_millis(30);
 const SAVE_DELAY: Duration = Duration::from_millis(500);
+// Long enough for a busy tablet, and short enough that a dead connection gets noticed.
+const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
 
 fn rotation_degrees(rotation: Rotation) -> u32 {
     match rotation {
@@ -44,6 +47,41 @@ pub fn state_line(settings: &Settings, live: &LiveConfig, screen_width: f64, scr
     )
 }
 
+/// Colors without the `#`, then outline thickness, outside darkness and whether to animate.
+pub fn theme_line(settings: &Settings) -> String {
+    let t = settings.active_theme();
+    let hex = |c: Rgb| c.to_hex()[1..].to_string();
+    format!(
+        "theme {} {} {} {} {} {} {} {} {}\n",
+        hex(t.background),
+        hex(t.panel),
+        hex(t.text),
+        hex(t.muted),
+        hex(t.accent),
+        hex(t.outline),
+        t.outline_thickness,
+        t.outside_dim,
+        u8::from(settings.animations),
+    )
+}
+
+/// The app's other settings. Following the screen means the app mustn't lock its orientation.
+pub fn prefs_line(settings: &Settings, following: bool) -> String {
+    format!(
+        "prefs {} {} {} {}\n",
+        u8::from(settings.show_area_label),
+        (settings.hold_to_edit_seconds * 1000.0) as u32,
+        (settings.edit_timeout_seconds * 1000.0) as u32,
+        u8::from(following),
+    )
+}
+
+/// Reads a `rotation` line from the tablet app, sent when its screen turns.
+pub fn parse_rotation_line(line: &str) -> Option<Rotation> {
+    let degrees = line.trim().strip_prefix("rotation ")?;
+    Rotation::from_android(degrees.parse::<u32>().ok().filter(|d| d % 90 == 0)? / 90)
+}
+
 /// Reads a `set` line from the tablet app. Anything malformed or out of range is rejected.
 pub fn parse_set(line: &str) -> Option<AreaMm> {
     let mut parts = line.trim().split(' ');
@@ -66,20 +104,35 @@ pub fn parse_set(line: &str) -> Option<AreaMm> {
     (in_range && parts.next().is_none()).then_some(area)
 }
 
-fn serve(stream: TcpStream, shared: &Shared) -> io::Result<()> {
+/// Serves one connection until it ends, or until a newer one replaces it.
+fn serve(stream: TcpStream, shared: &Shared, id: u64, newest: &AtomicU64) -> io::Result<()> {
     stream.set_nodelay(true)?;
     stream.set_read_timeout(Some(POLL))?;
+    stream.set_write_timeout(Some(WRITE_TIMEOUT))?;
     let mut writer = stream.try_clone()?;
     let mut reader = BufReader::new(stream);
     let mut line = String::new();
-    let screen_aspect = shared.target.width / shared.target.height;
     let mut sent_state = String::new();
     let mut sent_outline = None;
+    let mut sent_theme = String::new();
+    let mut sent_prefs = String::new();
     let mut unsaved_since: Option<Instant> = None;
 
-    while !shared.stats.stop.load(Ordering::SeqCst) {
+    while !shared.stats.stop.load(Ordering::SeqCst) && newest.load(Ordering::SeqCst) == id {
         let settings = shared.settings();
-        let state = state_line(&settings, &shared.live_config(), shared.target.width, screen_aspect);
+        let theme = theme_line(&settings);
+        if theme != sent_theme {
+            writer.write_all(theme.as_bytes())?;
+            sent_theme = theme;
+        }
+        // Before the state line, so the app knows whether to obey the orientation in it.
+        let prefs = prefs_line(&settings, shared.follows_screen());
+        if prefs != sent_prefs {
+            writer.write_all(prefs.as_bytes())?;
+            sent_prefs = prefs;
+        }
+        let live = shared.live_config();
+        let state = state_line(&settings, &live, live.target.width, live.target.width / live.target.height);
         if state != sent_state {
             writer.write_all(state.as_bytes())?;
             sent_state = state;
@@ -97,6 +150,8 @@ fn serve(stream: TcpStream, shared: &Shared) -> io::Result<()> {
                 if let Some(area) = parse_set(&line) {
                     shared.update_settings(|s| *s.area_mut() = area);
                     unsaved_since = Some(Instant::now());
+                } else if let Some(rotation) = parse_rotation_line(&line) {
+                    shared.set_screen_rotation(rotation);
                 }
                 line.clear();
             }
@@ -124,12 +179,21 @@ pub fn run(shared: Arc<Shared>) {
             return;
         }
     };
+    // The newest connection wins. A half-open old one can't block it, because the old one's thread
+    // sees it's been replaced within one poll.
+    let newest = Arc::new(AtomicU64::new(0));
     for stream in listener.incoming() {
         let Ok(stream) = stream else { continue };
-        shared.app_connected.store(true, Ordering::SeqCst);
-        let _ = serve(stream, &shared);
-        shared.app_connected.store(false, Ordering::SeqCst);
-        let _ = shared.save_settings();
+        let id = newest.fetch_add(1, Ordering::SeqCst) + 1;
+        let (shared, newest) = (shared.clone(), newest.clone());
+        std::thread::spawn(move || {
+            shared.app_connected.store(true, Ordering::SeqCst);
+            let _ = serve(stream, &shared, id, &newest);
+            if newest.load(Ordering::SeqCst) == id {
+                shared.app_connected.store(false, Ordering::SeqCst);
+            }
+            let _ = shared.save_settings();
+        });
     }
 }
 
@@ -137,6 +201,53 @@ pub fn run(shared: Arc<Shared>) {
 mod tests {
     use super::*;
     use crate::mapping::{Rotation, TABLET_SHORT_MM};
+
+    #[test]
+    fn theme_line_matches_what_the_app_parses() {
+        let mut settings = Settings::default();
+        settings.choose_theme("Daylight");
+        settings.theme_overrides.outline = Some(Rgb(1, 2, 255));
+        settings.animations = false;
+        // The exact form the Kotlin test checks on the other side.
+        assert_eq!(theme_line(&settings), "theme f4f4f6 ffffff 1c1e23 62666f d62f7c 0102ff 2 35 0\n");
+    }
+
+    #[test]
+    fn prefs_line_matches_what_the_app_parses() {
+        let settings = Settings { hold_to_edit_seconds: 1.5, edit_timeout_seconds: 30.0, show_area_label: false, ..Settings::default() };
+        assert_eq!(prefs_line(&settings, true), "prefs 0 1500 30000 1\n");
+    }
+
+    #[test]
+    fn rotation_lines_from_the_app() {
+        assert_eq!(parse_rotation_line("rotation 90\n"), Some(Rotation::R90));
+        assert_eq!(parse_rotation_line("rotation 270"), Some(Rotation::R270));
+        for bad in ["rotation 45", "rotation x", "rotation 360", "rotation", "set 1 2 3 4 5"] {
+            assert_eq!(parse_rotation_line(bad), None, "{bad}");
+        }
+    }
+
+    #[test]
+    fn a_new_connection_replaces_a_half_open_one() {
+        use crate::mapping::Rect;
+        use crate::shared::Overrides;
+        use std::net::TcpListener;
+        let target = Rect { left: 0.0, top: 0.0, width: 2560.0, height: 1600.0 };
+        let shared = Shared::new(Settings::default(), std::path::PathBuf::new(), Overrides::default(), target, true);
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        // Connected and never read from or written to, as a dead tablet app would be.
+        let _silent = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let newest = AtomicU64::new(1);
+        std::thread::scope(|scope| {
+            let ending = scope.spawn(|| serve(stream, &shared, 1, &newest));
+            std::thread::sleep(Duration::from_millis(100));
+            assert!(!ending.is_finished());
+            newest.store(2, Ordering::SeqCst);
+            std::thread::sleep(Duration::from_millis(200));
+            assert!(ending.is_finished());
+        });
+    }
 
     #[test]
     fn set_line_round_trip_from_the_app() {
@@ -170,8 +281,11 @@ mod tests {
         let mut settings = Settings { rotation: Some(Rotation::R90), ..Settings::default() };
         settings.save_preset("My preset name").unwrap();
         *settings.area_mut() = AreaMm { width: 120.0, height: 75.0, offset_x: 10.0, offset_y: -5.0, rotation_deg: 15.0 };
+        let screen = crate::mapping::Rect { left: 0.0, top: 0.0, width: 2560.0, height: 1600.0 };
         let live = LiveConfig {
             output: Output::Direct,
+            target: screen,
+            desktop: screen,
             rotation: Rotation::R90,
             area: settings.area().resolve(Rotation::R90),
             tip_click: true,

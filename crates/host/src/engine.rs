@@ -14,10 +14,11 @@ use crate::control;
 use crate::inject::{self, Injector};
 use crate::mapping::{to_unit, Rotation};
 use crate::otd;
-use crate::settings::Output;
+use crate::settings::{Output, UsbPath};
 use crate::shared::{LiveConfig, Shared};
 use crate::stats::{ClockSync, Event, PrecisionSample, SampleTiming};
 use crate::trace::{Entry, Recorder};
+use crate::usbadb::DirectLink;
 
 const FORWARD_PORT: u16 = 27191;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(3);
@@ -33,6 +34,10 @@ const DEVICE_POLL: Duration = Duration::from_millis(100);
 const JUMP_PX: f64 = 300.0;
 // Kept short because this wait holds up the input thread. The cursor normally moves within 0.1 ms.
 const CURSOR_WAIT: Duration = Duration::from_micros(500);
+const PIN_SETTLE: Duration = Duration::from_millis(800);
+// On direct USB the helper stops if the PC goes quiet for this long, which gives the pen back to
+// Android even if this program is killed.
+const HELPER_PING_TIMEOUT_MS: u64 = 2000;
 
 pub struct EngineOptions {
     pub adb: Adb,
@@ -52,6 +57,8 @@ pub struct EngineOptions {
     pub ping_ms: Option<u64>,
     /// Fake pen bursts, on and off times in ms. For reproducing stalls without the pen.
     pub burst: Option<(u64, u64)>,
+    /// Overrides the saved USB path for this run.
+    pub usb_path: Option<UsbPath>,
 }
 
 impl EngineOptions {
@@ -86,17 +93,31 @@ fn start_pc_watchdog(shared: Arc<Shared>) {
     });
 }
 
-/// Brings up the tablet app on another thread, so a slow install can't delay the pen.
-fn start_tablet_app(adb: Adb, apk: PathBuf) {
-    std::thread::spawn(move || {
-        let result = adb
-            .reverse(control::APP_PORT)
-            .and_then(|()| adb.ensure_app(&apk))
-            .and_then(|()| adb.start_app());
-        if let Err(e) = result {
-            eprintln!("could not start the tablet app: {e}");
+/// Installs the tablet app if needed and brings it up, as far as the settings ask. `reverse` is for
+/// the adb path, where adb.exe carries the app's link. Pinning needs the app already showing, which
+/// takes a moment after starting it.
+fn prepare_tablet_app(adb: &Adb, apk: &std::path::Path, shared: &Shared, reverse: bool, open: bool) {
+    let settings = shared.settings();
+    let result = (|| -> io::Result<()> {
+        if reverse {
+            adb.reverse(control::APP_PORT)?;
         }
-    });
+        adb.ensure_app(apk)?;
+        if open && settings.open_tablet_app {
+            adb.start_app()?;
+        }
+        if settings.screen_pinning && !shared.pinned.load(Ordering::SeqCst) {
+            std::thread::sleep(PIN_SETTLE);
+            adb.pin_app()?;
+            shared.pinned.store(true, Ordering::SeqCst);
+        } else if !settings.screen_pinning && shared.pinned.swap(false, Ordering::SeqCst) {
+            adb.unpin_app()?;
+        }
+        Ok(())
+    })();
+    if let Err(e) = result {
+        eprintln!("could not start the tablet app: {e}");
+    }
 }
 
 /// Connects through the forward and waits for the helper's first frame. A forward accepts the
@@ -123,30 +144,95 @@ fn connect(deadline: Instant) -> io::Result<(TcpStream, Hello)> {
     }
 }
 
-fn read_frame(stream: &mut TcpStream, buf: &mut [u8; DOWN_FRAME_LEN], busy: bool, shared: &Shared) -> io::Result<()> {
-    if !busy {
-        return stream.read_exact(buf);
-    }
-    let mut filled = 0;
-    while filled < buf.len() {
-        match stream.read(&mut buf[filled..]) {
-            Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
-            Ok(n) => filled += n,
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
-                if shared.stats.stop.load(Ordering::Relaxed) {
-                    return Err(io::ErrorKind::UnexpectedEof.into());
+/// Where pen frames come from. Generic rather than dynamic, so the input thread's path has no
+/// extra indirect call.
+trait PenLink {
+    fn next_frame(&mut self, buf: &mut [u8; DOWN_FRAME_LEN], shared: &Shared) -> io::Result<()>;
+}
+
+struct TcpLink {
+    stream: TcpStream,
+    busy: bool,
+}
+
+impl PenLink for TcpLink {
+    #[inline]
+    fn next_frame(&mut self, buf: &mut [u8; DOWN_FRAME_LEN], shared: &Shared) -> io::Result<()> {
+        if !self.busy {
+            return self.stream.read_exact(buf);
+        }
+        let mut filled = 0;
+        while filled < buf.len() {
+            match self.stream.read(&mut buf[filled..]) {
+                Ok(0) => return Err(io::ErrorKind::UnexpectedEof.into()),
+                Ok(n) => filled += n,
+                Err(e) if e.kind() == io::ErrorKind::WouldBlock => {
+                    if shared.stats.stop.load(Ordering::Relaxed) {
+                        return Err(io::ErrorKind::UnexpectedEof.into());
+                    }
+                    std::hint::spin_loop();
                 }
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
+}
+
+impl PenLink for DirectLink {
+    #[inline]
+    fn next_frame(&mut self, buf: &mut [u8; DOWN_FRAME_LEN], _shared: &Shared) -> io::Result<()> {
+        DirectLink::next_frame(self, buf)
+    }
+}
+
+fn ping_interval(options: &EngineOptions) -> Duration {
+    match options.ping_ms {
+        Some(ms) => Duration::from_millis(ms),
+        None if options.ping_bench => BENCH_PING_INTERVAL,
+        None if options.stall_trace.is_some() => TRACE_PING_INTERVAL,
+        None => PING_INTERVAL,
+    }
+}
+
+/// Pings until `send` fails.
+fn start_pinger(interval: Duration, clock: Instant, mut send: impl FnMut(u64) -> io::Result<()> + Send + 'static) {
+    std::thread::spawn(move || loop {
+        if send(clock.elapsed().as_nanos() as u64).is_err() {
+            break;
+        }
+        if interval < Duration::from_millis(5) {
+            // Sleep can't reliably wait this short, and the benchmark needs a steady rate.
+            let t0 = Instant::now();
+            while t0.elapsed() < interval {
                 std::hint::spin_loop();
             }
-            Err(e) => return Err(e),
+        } else {
+            std::thread::sleep(interval);
+        }
+    });
+}
+
+/// Common to both USB paths, once the helper has said hello.
+fn session_started(adb: Option<&Adb>, shared: &Arc<Shared>, disconnected_at: &mut Option<Instant>, hello: &Hello) {
+    shared.stats.event(Event::Connected { recovery: disconnected_at.take().map(|t| t.elapsed()) });
+    shared.connected.store(true, Ordering::SeqCst);
+    // Only needed when following the screen, because reading it takes a while.
+    if let Some(adb) = adb {
+        if shared.settings().rotation.is_none() {
+            shared.set_screen_rotation(adb.display_rotation().unwrap_or(Rotation::R90));
         }
     }
-    Ok(())
+    let live = shared.live_config();
+    println!(
+        "connected: pen range {}x{}, pressure {}, rotation {:?}, pen area {:.1} x {:.1} mm",
+        hello.max_x, hello.max_y, hello.max_pressure, live.rotation, live.area.width_mm, live.area.height_mm
+    );
 }
 
 /// In test mode, waits for the cursor to reach the new position and checks where it landed.
-fn measure_cursor(shared: &Shared, before: (i32, i32), exact: (f64, f64), previous: &mut Option<(f64, f64)>) -> Option<f32> {
-    let expected = shared.target.pixel_index(exact);
+fn measure_cursor(shared: &Shared, target: &crate::mapping::Rect, before: (i32, i32), exact: (f64, f64), previous: &mut Option<(f64, f64)>) -> Option<f32> {
+    let expected = target.pixel_index(exact);
     let t0 = Instant::now();
     let mut cursor = inject::cursor_position();
     let should_move = expected != before;
@@ -175,8 +261,8 @@ fn measure_cursor(shared: &Shared, before: (i32, i32), exact: (f64, f64), previo
 }
 
 /// The hot path: one blocking read, one SendInput, per pen report.
-fn pump(stream: &mut TcpStream, hello: &Hello, injector: &mut Injector, shared: &Shared, options: &EngineOptions, recorder: &mut Option<Recorder>) -> io::Result<()> {
-    let (busy, ping_bench) = (options.busy_poll, options.ping_bench);
+fn pump<L: PenLink>(link: &mut L, hello: &Hello, injector: &mut Injector, shared: &Shared, options: &EngineOptions, recorder: &mut Option<Recorder>) -> io::Result<()> {
+    let ping_bench = options.ping_bench;
     let mut last_sample_at: Option<Duration> = None;
     let clock = shared.clock;
     let stats = &shared.stats;
@@ -188,7 +274,7 @@ fn pump(stream: &mut TcpStream, hello: &Hello, injector: &mut Injector, shared: 
     let mut live: LiveConfig = shared.live_config();
     let mut previous_exact = None;
     loop {
-        read_frame(stream, &mut buf, busy, shared)?;
+        link.next_frame(&mut buf, shared)?;
         let now = clock.elapsed();
         if stats.stop.load(Ordering::SeqCst) {
             return Ok(());
@@ -205,6 +291,8 @@ fn pump(stream: &mut TcpStream, hello: &Hello, injector: &mut Injector, shared: 
                     if live.output != previous_output {
                         injector.reset();
                     }
+                    injector.target = live.target;
+                    injector.desktop = live.desktop;
                 }
                 let transport_ms = sync.offset_ns().map(|offset| {
                     let on_host = s.timestamp_ns as i64 - offset;
@@ -225,7 +313,8 @@ fn pump(stream: &mut TcpStream, hello: &Hello, injector: &mut Injector, shared: 
                 let host_ms = (clock.elapsed() - now).as_secs_f32() * 1e3;
 
                 let cursor_ms = if testing && s.flags & FLAG_IN_RANGE != 0 {
-                    measure_cursor(shared, before, injector.target.pixel(u, v), &mut previous_exact)
+                    let target = injector.target;
+                    measure_cursor(shared, &target, before, target.pixel(u, v), &mut previous_exact)
                 } else {
                     None
                 };
@@ -298,61 +387,60 @@ fn pump(stream: &mut TcpStream, hello: &Hello, injector: &mut Injector, shared: 
     }
 }
 
-fn run_session(options: &EngineOptions, shared: &Arc<Shared>, injector: &mut Injector, disconnected_at: &mut Option<Instant>, recorder: &mut Option<Recorder>) -> io::Result<()> {
+/// The path through adb.exe. `had_hello` says whether the helper ever answered.
+fn run_session(options: &EngineOptions, shared: &Arc<Shared>, injector: &mut Injector, disconnected_at: &mut Option<Instant>, recorder: &mut Option<Recorder>, open_app: bool, had_hello: &mut bool) -> io::Result<()> {
     let adb = &options.adb;
     adb.forward(FORWARD_PORT, SOCKET_NAME)?;
     let mut child = adb.spawn_helper(&options.helper_args())?;
     if let Some(apk) = &options.app {
-        start_tablet_app(adb.clone(), apk.clone());
+        // On another thread, so a slow install can't delay the pen.
+        let (adb, apk, shared) = (adb.clone(), apk.clone(), shared.clone());
+        std::thread::spawn(move || prepare_tablet_app(&adb, &apk, &shared, true, open_app));
     }
     let result = (|| {
-        let (mut stream, hello) = connect(Instant::now() + HELLO_TIMEOUT)?;
-        shared.stats.event(Event::Connected { recovery: disconnected_at.take().map(|t| t.elapsed()) });
-        shared.connected.store(true, Ordering::SeqCst);
-
-        // Only needed when following the screen, because reading it takes a while.
-        if shared.settings().rotation.is_none() {
-            shared.set_screen_rotation(adb.display_rotation().unwrap_or(Rotation::R90));
-        }
-        let live = shared.live_config();
-        println!(
-            "connected: pen range {}x{}, pressure {}, rotation {:?}, pen area {:.1} x {:.1} mm",
-            hello.max_x, hello.max_y, hello.max_pressure, live.rotation, live.area.width_mm, live.area.height_mm
-        );
-
+        let (stream, hello) = connect(Instant::now() + HELLO_TIMEOUT)?;
+        *had_hello = true;
+        session_started(Some(adb), shared, disconnected_at, &hello);
         let mut pinger = stream.try_clone()?;
-        let clock = shared.clock;
-        let ping_interval = match options.ping_ms {
-            Some(ms) => Duration::from_millis(ms),
-            None if options.ping_bench => BENCH_PING_INTERVAL,
-            None if options.stall_trace.is_some() => TRACE_PING_INTERVAL,
-            None => PING_INTERVAL,
-        };
-        std::thread::spawn(move || loop {
-            let host_ns = clock.elapsed().as_nanos() as u64;
-            if pinger.write_all(&UpFrame::Ping { host_ns }.encode()).is_err() {
-                break;
-            }
-            if ping_interval < Duration::from_millis(5) {
-                // Sleep can't reliably wait this short, and the benchmark needs a steady rate.
-                let t0 = Instant::now();
-                while t0.elapsed() < ping_interval {
-                    std::hint::spin_loop();
-                }
-            } else {
-                std::thread::sleep(ping_interval);
-            }
-        });
-
+        start_pinger(ping_interval(options), shared.clock, move |host_ns| pinger.write_all(&UpFrame::Ping { host_ns }.encode()));
         if options.busy_poll {
             stream.set_nonblocking(true)?;
         }
-        pump(&mut stream, &hello, injector, shared, options, recorder)
+        let mut link = TcpLink { stream, busy: options.busy_poll };
+        pump(&mut link, &hello, injector, shared, options, recorder)
     })();
     shared.connected.store(false, Ordering::SeqCst);
     let _ = child.kill();
     let _ = child.wait();
     result
+}
+
+/// The direct path. adb.exe does the setup, since it knows how to install and start things, then
+/// steps aside so this program can open the USB interface itself.
+fn run_direct_session(options: &EngineOptions, shared: &Arc<Shared>, injector: &mut Injector, disconnected_at: &mut Option<Instant>, recorder: &mut Option<Recorder>, open_app: bool, had_hello: &mut bool) -> Result<io::Result<()>, io::Error> {
+    let adb = &options.adb;
+    if let Some(apk) = &options.app {
+        prepare_tablet_app(adb, apk, shared, false, open_app);
+    }
+    if shared.settings().rotation.is_none() {
+        shared.set_screen_rotation(adb.display_rotation().unwrap_or(Rotation::R90));
+    }
+    adb.kill_server()?;
+
+    let timeout_ms = HELPER_PING_TIMEOUT_MS.max(ping_interval(options).as_millis() as u64 * 10);
+    let args = format!("{} --ping-timeout-ms {timeout_ms}", options.helper_args());
+    let (mut link, hello) = DirectLink::start(&args, control::APP_PORT)?;
+    *had_hello = true;
+    shared.direct_active.store(true, Ordering::SeqCst);
+    session_started(None, shared, disconnected_at, &hello);
+    let pinger = link.pinger();
+    start_pinger(ping_interval(options), shared.clock, move |host_ns| pinger.ping(host_ns));
+    let result = pump(&mut link, &hello, injector, shared, options, recorder);
+    shared.connected.store(false, Ordering::SeqCst);
+    // Closes the stream, which makes the helper exit and gives the pen back straight away.
+    link.close();
+    shared.direct_active.store(false, Ordering::SeqCst);
+    Ok(result)
 }
 
 /// Runs until `stop` is set, reconnecting whenever the tablet goes away.
@@ -365,7 +453,8 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
         std::thread::sleep(Duration::from_millis(50));
     }
 
-    let mut injector = Injector::new(shared.target, inject::virtual_desktop(), options.dry_run);
+    let live = shared.live_config();
+    let mut injector = Injector::new(live.target, live.desktop, options.dry_run);
     let mut recorder = options.stall_trace.clone().map(Recorder::new);
     if recorder.is_some() {
         start_pc_watchdog(shared.clone());
@@ -376,9 +465,17 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
     let mut pushed = false;
     let mut disconnected_at: Option<Instant> = None;
     let mut waiting_reported = false;
+    // The tablet app comes to the front once per plug-in. Doing it after every hiccup would take
+    // the tablet away from whatever else is on it.
+    let mut opened_app = false;
+    let mut direct_failed = false;
     while !stats.stop.load(Ordering::SeqCst) {
         let state = options.adb.device_state();
         shared.set_device_state(state);
+        if state != DeviceState::Ready {
+            opened_app = false;
+            direct_failed = false;
+        }
         if state == DeviceState::AdbMissing {
             // Only worth retrying slowly: it needs someone to put adb in place.
             std::thread::sleep(Duration::from_secs(2));
@@ -406,7 +503,34 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
                 }
             }
         }
-        let outcome = run_session(&options, &shared, &mut injector, &mut disconnected_at, &mut recorder);
+        let open_app = !opened_app;
+        opened_app = true;
+        let mut had_hello = false;
+        let wanted_path = options.usb_path.unwrap_or_else(|| shared.settings().usb_path);
+        let outcome = if wanted_path == UsbPath::Direct && !direct_failed {
+            match run_direct_session(&options, &shared, &mut injector, &mut disconnected_at, &mut recorder, open_app, &mut had_hello) {
+                Ok(outcome) => {
+                    *shared.direct_problem.lock().unwrap() = None;
+                    outcome
+                }
+                Err(e) => {
+                    // The pen matters more than the path: go back to adb.exe until the next plug-in.
+                    eprintln!("direct USB failed: {e}");
+                    *shared.direct_problem.lock().unwrap() = Some(e.to_string());
+                    direct_failed = true;
+                    Ok(())
+                }
+            }
+        } else {
+            if wanted_path == UsbPath::Adb {
+                *shared.direct_problem.lock().unwrap() = None;
+            }
+            run_session(&options, &shared, &mut injector, &mut disconnected_at, &mut recorder, open_app, &mut had_hello)
+        };
+        // No answer from the helper may mean it's gone from the tablet, or is an old version.
+        if !had_hello {
+            pushed = false;
+        }
         injector.reset();
         if stats.stop.load(Ordering::SeqCst) {
             break;

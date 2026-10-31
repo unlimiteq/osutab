@@ -16,6 +16,9 @@ use crate::stats::Stats;
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct LiveConfig {
     pub output: Output,
+    /// The screen the pen area maps onto, and the whole desktop around it.
+    pub target: Rect,
+    pub desktop: Rect,
     pub rotation: Rotation,
     pub area: ActiveArea,
     pub tip_click: bool,
@@ -35,7 +38,6 @@ pub struct Shared {
     pub relay: Relay,
     /// The OpenTabletDriver daemon this program started, to stop when it quits.
     pub otd_daemon: Mutex<Option<std::process::Child>>,
-    pub target: Rect,
     pub clock: Instant,
     pub connected: AtomicBool,
     pub app_connected: AtomicBool,
@@ -46,6 +48,14 @@ pub struct Shared {
     pub window: AtomicIsize,
     /// The tray thread's id while its icon exists. Closing the window hides it only then.
     pub tray_thread: AtomicU32,
+    /// True while the pen is coming over direct USB rather than through adb.exe.
+    pub direct_active: AtomicBool,
+    /// True once this program has pinned the tablet app.
+    pub pinned: AtomicBool,
+    /// Something to tell the person, such as a settings file that had problems.
+    pub notice: Mutex<Option<String>>,
+    /// Why direct USB isn't in use, when it was asked for.
+    pub direct_problem: Mutex<Option<String>>,
     device_state: AtomicU8,
     pen_u: AtomicU32,
     pen_v: AtomicU32,
@@ -54,14 +64,20 @@ pub struct Shared {
     live: Mutex<LiveConfig>,
     settings: Mutex<Settings>,
     screen_rotation: Mutex<Rotation>,
+    display: Mutex<(Rect, Rect)>,
     overrides: Overrides,
     settings_path: PathBuf,
+    // Keeps two saves from writing at once. Taken before the settings, so a slow disk can't hold
+    // up whoever's changing them.
+    save_lock: Mutex<()>,
 }
 
-fn build_live(settings: &Settings, overrides: &Overrides, screen_rotation: Rotation) -> LiveConfig {
+fn build_live(settings: &Settings, overrides: &Overrides, screen_rotation: Rotation, display: (Rect, Rect)) -> LiveConfig {
     let rotation = overrides.rotation.or(settings.rotation).unwrap_or(screen_rotation);
     LiveConfig {
         output: settings.output,
+        target: display.0,
+        desktop: display.1,
         rotation,
         area: settings.area().resolve(rotation),
         tip_click: overrides.tip_click.unwrap_or(settings.tip_click),
@@ -78,13 +94,13 @@ impl Shared {
         setup_done: bool,
     ) -> Self {
         let screen_rotation = Rotation::R90;
-        let live = build_live(&settings, &overrides, screen_rotation);
+        let display = (target, target);
+        let live = build_live(&settings, &overrides, screen_rotation, display);
         let clock = Instant::now();
         Shared {
             stats: Stats::new(clock),
             relay: Relay::default(),
             otd_daemon: Mutex::new(None),
-            target,
             clock,
             connected: AtomicBool::new(false),
             app_connected: AtomicBool::new(false),
@@ -92,6 +108,10 @@ impl Shared {
             setup_done: AtomicBool::new(setup_done),
             window: AtomicIsize::new(0),
             tray_thread: AtomicU32::new(0),
+            direct_active: AtomicBool::new(false),
+            pinned: AtomicBool::new(false),
+            notice: Mutex::new(None),
+            direct_problem: Mutex::new(None),
             device_state: AtomicU8::new(DeviceState::NoDevice as u8),
             pen_u: AtomicU32::new(0),
             pen_v: AtomicU32::new(0),
@@ -100,8 +120,10 @@ impl Shared {
             live: Mutex::new(live),
             settings: Mutex::new(settings),
             screen_rotation: Mutex::new(screen_rotation),
+            display: Mutex::new(display),
             overrides,
             settings_path,
+            save_lock: Mutex::new(()),
         }
     }
 
@@ -127,10 +149,36 @@ impl Shared {
         &self.settings_path
     }
 
+    /// Only tells the input thread about changes it cares about, so dragging a color slider costs
+    /// the pen nothing.
     fn rebuild(&self, settings: &Settings) {
         let screen_rotation = *self.screen_rotation.lock().unwrap();
-        *self.live.lock().unwrap() = build_live(settings, &self.overrides, screen_rotation);
-        self.generation.fetch_add(1, Ordering::Release);
+        let display = *self.display.lock().unwrap();
+        let wanted = build_live(settings, &self.overrides, screen_rotation, display);
+        let mut live = self.live.lock().unwrap();
+        if *live != wanted {
+            *live = wanted;
+            self.generation.fetch_add(1, Ordering::Release);
+        }
+    }
+
+    /// True when the pen's orientation comes from the tablet's screen.
+    pub fn follows_screen(&self) -> bool {
+        self.overrides.rotation.is_none() && self.settings.lock().unwrap().rotation.is_none()
+    }
+
+    /// The screen the pen area maps onto.
+    pub fn target(&self) -> Rect {
+        self.live.lock().unwrap().target
+    }
+
+    pub fn set_display(&self, target: Rect, desktop: Rect) {
+        let mut display = self.display.lock().unwrap();
+        if *display != (target, desktop) {
+            *display = (target, desktop);
+            drop(display);
+            self.rebuild(&self.settings.lock().unwrap());
+        }
     }
 
     /// Changes settings. The input thread picks the change up on its next pen report.
@@ -146,7 +194,9 @@ impl Shared {
     }
 
     pub fn save_settings(&self) -> std::io::Result<()> {
-        settings::save(&self.settings_path, &self.settings.lock().unwrap())
+        let _saving = self.save_lock.lock().unwrap();
+        let settings = self.settings();
+        settings::save(&self.settings_path, &settings)
     }
 
     pub fn live_generation(&self) -> u64 {
@@ -191,6 +241,32 @@ mod tests {
         s.update_settings(|st| st.area_mut().width = 100.0);
         assert_ne!(s.live_generation(), before);
         assert_eq!(s.live_config().area.width_mm, 100.0);
+    }
+
+    #[test]
+    fn changes_the_input_thread_ignores_dont_disturb_it() {
+        let s = shared(Settings::default(), Overrides::default());
+        let before = s.live_generation();
+        s.update_settings(|st| {
+            st.choose_theme("Daylight");
+            st.animations = false;
+        });
+        assert_eq!(s.live_generation(), before);
+    }
+
+    #[test]
+    fn a_new_display_reaches_the_input_thread() {
+        let s = shared(Settings::default(), Overrides::default());
+        let before = s.live_generation();
+        let new = Rect { left: 0.0, top: 0.0, width: 1920.0, height: 1080.0 };
+        let desktop = Rect { left: -1920.0, top: 0.0, width: 3840.0, height: 1080.0 };
+        s.set_display(new, desktop);
+        assert_ne!(s.live_generation(), before);
+        assert_eq!(s.target(), new);
+        assert_eq!(s.live_config().desktop, desktop);
+        let after = s.live_generation();
+        s.set_display(new, desktop);
+        assert_eq!(s.live_generation(), after, "the same display changes nothing");
     }
 
     #[test]

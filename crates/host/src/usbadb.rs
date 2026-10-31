@@ -3,10 +3,11 @@
 //! same authorization adb.exe uses, so it needs adb.exe's server to be stopped: only one program
 //! can hold the USB interface.
 
-use std::io;
+use std::io::{self, Read, Write};
 use std::mem::{size_of, zeroed};
+use std::net::{Ipv4Addr, TcpStream};
 use std::ptr::{null, null_mut};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -18,6 +19,8 @@ use windows_sys::Win32::Devices::DeviceAndDriverInstallation::*;
 use windows_sys::Win32::Devices::Usb::*;
 use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Storage::FileSystem::*;
+
+use osutab_core::{DownFrame, Hello, UpFrame, DOWN_FRAME_LEN, PROTOCOL_VERSION};
 
 const A_CNXN: u32 = 0x4e58_4e43;
 const A_AUTH: u32 = 0x4854_5541;
@@ -33,6 +36,16 @@ const AUTH_SIGNATURE: u32 = 2;
 const AUTH_RSAPUBLICKEY: u32 = 3;
 const HEADER_LEN: usize = 24;
 const READ_BUFFER: usize = 64 * 1024;
+// WinUSB's policy number for how long a transfer may wait, from winusbio.h.
+const PIPE_TRANSFER_TIMEOUT: u32 = 0x03;
+// Until the helper answers, a silent tablet shouldn't block forever.
+const SETUP_TIMEOUT_MS: u32 = 3000;
+const OPEN_RETRY: Duration = Duration::from_secs(3);
+const HELPER_STREAM: u32 = 1;
+const REVERSE_STREAM: u32 = 2;
+const PEN_STREAM: u32 = 3;
+const FIRST_APP_STREAM: u32 = 100;
+const APP_WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 
 // WinUSB's generic device interface, which is how this tablet's ADB interface registers.
 const GUID_WINUSB_DEVICE: GUID = GUID::from_u128(0xdee824ef_729b_4a0e_9c14_b7117d33a817);
@@ -174,6 +187,15 @@ impl UsbPipes {
         }
     }
 
+    /// How long a read may wait, or 0 to wait for as long as it takes.
+    fn set_read_timeout(&self, ms: u32) -> io::Result<()> {
+        let ok = unsafe { WinUsb_SetPipePolicy(self.winusb, self.pipe_in, PIPE_TRANSFER_TIMEOUT, size_of::<u32>() as u32, &ms as *const u32 as *const _) };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(())
+    }
+
     pub fn read(&self, buffer: &mut [u8]) -> io::Result<usize> {
         let mut got = 0u32;
         let ok = unsafe { WinUsb_ReadPipe(self.winusb, self.pipe_in, buffer.as_mut_ptr(), buffer.len() as u32, &mut got, null_mut()) };
@@ -279,11 +301,254 @@ pub fn open_stream(pipes: &UsbPipes, local_id: u32, service: &str, buffer: &mut 
     }
 }
 
+/// The tablet app's link, carried over this USB connection instead of by adb.exe's `adb reverse`.
+struct AppStream {
+    local: u32,
+    remote: u32,
+    tcp: TcpStream,
+    can_send: Arc<AtomicBool>,
+}
+
+/// The live pen stream over direct USB. It also carries the tablet app's link, so the app doesn't
+/// need to know which USB path is in use.
+pub struct DirectLink {
+    pipes: Arc<UsbPipes>,
+    buffer: Vec<u8>,
+    remote_pen: u32,
+    pending: Vec<u8>,
+    // Waiting for an acknowledgement here, instead of before returning a frame, keeps the USB
+    // write from ever delaying SendInput.
+    unacknowledged: bool,
+    can_ping: Arc<AtomicBool>,
+    closed: Arc<AtomicBool>,
+    app_streams: Vec<AppStream>,
+    next_app_stream: u32,
+    app_port: u16,
+}
+
+/// Sends pings from another thread.
+pub struct DirectPinger {
+    pipes: Arc<UsbPipes>,
+    remote_pen: u32,
+    can_ping: Arc<AtomicBool>,
+    closed: Arc<AtomicBool>,
+}
+
+impl DirectPinger {
+    /// Skips a ping while the last one is unanswered, because adb allows one unacknowledged write
+    /// per stream. Fails once the link has closed, which ends the pinging thread.
+    pub fn ping(&self, host_ns: u64) -> io::Result<()> {
+        if self.closed.load(Ordering::Relaxed) {
+            return Err(io::ErrorKind::NotConnected.into());
+        }
+        if self.can_ping.swap(false, Ordering::AcqRel) {
+            self.pipes.send(A_WRTE, PEN_STREAM, self.remote_pen, &UpFrame::Ping { host_ns }.encode())?;
+        }
+        Ok(())
+    }
+}
+
+/// adb.exe takes a moment to let go of the interface after it's stopped.
+fn open_when_free() -> io::Result<UsbPipes> {
+    let start = Instant::now();
+    loop {
+        match UsbPipes::open() {
+            Ok(pipes) => return Ok(pipes),
+            Err(_) if start.elapsed() < OPEN_RETRY => std::thread::sleep(Duration::from_millis(50)),
+            Err(e) => return Err(e),
+        }
+    }
+}
+
+impl DirectLink {
+    /// Connects, starts the helper, and waits for its hello.
+    pub fn start(helper_args: &str, app_port: u16) -> io::Result<(DirectLink, Hello)> {
+        let pipes = Arc::new(open_when_free()?);
+        pipes.set_read_timeout(SETUP_TIMEOUT_MS)?;
+        handshake(&pipes)?;
+        let mut link = DirectLink {
+            pipes,
+            buffer: vec![0u8; READ_BUFFER],
+            remote_pen: 0,
+            pending: Vec::with_capacity(DOWN_FRAME_LEN * 8),
+            unacknowledged: false,
+            can_ping: Arc::new(AtomicBool::new(true)),
+            closed: Arc::new(AtomicBool::new(false)),
+            app_streams: Vec::new(),
+            next_app_stream: FIRST_APP_STREAM,
+            app_port,
+        };
+        let helper = crate::adb::REMOTE_HELPER;
+        link.open(HELPER_STREAM, &format!("shell:pkill -x osutab-helper; exec {helper} {helper_args}"))?;
+        link.open(REVERSE_STREAM, &format!("reverse:forward:tcp:{app_port};tcp:{app_port}"))?;
+
+        // The helper needs a moment before its socket exists.
+        let start = Instant::now();
+        link.remote_pen = loop {
+            match link.open(PEN_STREAM, &format!("localabstract:{}", osutab_core::SOCKET_NAME)) {
+                Ok(id) => break id,
+                Err(e) if e.kind() == io::ErrorKind::ConnectionRefused && start.elapsed() < OPEN_RETRY => {
+                    std::thread::sleep(Duration::from_millis(30));
+                }
+                Err(e) => return Err(e),
+            }
+        };
+
+        let mut frame = [0u8; DOWN_FRAME_LEN];
+        link.next_frame(&mut frame)?;
+        let hello = match DownFrame::decode(&frame) {
+            Some(DownFrame::Hello(h)) if h.version == PROTOCOL_VERSION => h,
+            _ => return Err(io::Error::other("unexpected first frame from helper")),
+        };
+        link.pipes.set_read_timeout(0)?;
+        Ok((link, hello))
+    }
+
+    pub fn pinger(&self) -> DirectPinger {
+        DirectPinger {
+            pipes: self.pipes.clone(),
+            remote_pen: self.remote_pen,
+            can_ping: self.can_ping.clone(),
+            closed: self.closed.clone(),
+        }
+    }
+
+    /// Opens a stream to a service on the tablet, and returns the tablet's id for it.
+    fn open(&mut self, local: u32, service: &str) -> io::Result<u32> {
+        let mut name = service.as_bytes().to_vec();
+        name.push(0);
+        self.pipes.send(A_OPEN, local, 0, &name)?;
+        loop {
+            let (header, len) = read_message(&self.pipes, &mut self.buffer)?;
+            match header.command {
+                A_OKAY if header.arg1 == local => return Ok(header.arg0),
+                A_CLSE if header.arg1 == local => return Err(io::Error::new(io::ErrorKind::ConnectionRefused, format!("the tablet refused {service}"))),
+                _ => self.handle_other(header, len)?,
+            }
+        }
+    }
+
+    /// The next frame from the helper. Blocks until there is one.
+    #[inline]
+    pub fn next_frame(&mut self, frame: &mut [u8; DOWN_FRAME_LEN]) -> io::Result<()> {
+        loop {
+            if self.pending.len() >= DOWN_FRAME_LEN {
+                frame.copy_from_slice(&self.pending[..DOWN_FRAME_LEN]);
+                self.pending.drain(..DOWN_FRAME_LEN);
+                return Ok(());
+            }
+            if self.unacknowledged {
+                self.unacknowledged = false;
+                self.pipes.send(A_OKAY, PEN_STREAM, self.remote_pen, &[])?;
+            }
+            let (header, len) = read_message(&self.pipes, &mut self.buffer)?;
+            match header.command {
+                A_WRTE if header.arg1 == PEN_STREAM => {
+                    self.unacknowledged = true;
+                    self.pending.extend_from_slice(&self.buffer[..len]);
+                }
+                A_OKAY if header.arg1 == PEN_STREAM => self.can_ping.store(true, Ordering::Release),
+                A_CLSE if header.arg1 == PEN_STREAM => return Err(io::ErrorKind::UnexpectedEof.into()),
+                _ => self.handle_other(header, len)?,
+            }
+        }
+    }
+
+    /// Everything that isn't pen data: the tablet app's link, and stream housekeeping.
+    fn handle_other(&mut self, header: Header, len: usize) -> io::Result<()> {
+        match header.command {
+            A_OPEN => self.open_app_stream(header.arg0),
+            A_WRTE => {
+                self.pipes.send(A_OKAY, header.arg1, header.arg0, &[])?;
+                if let Some(index) = self.app_streams.iter().position(|s| s.local == header.arg1) {
+                    // A slow control link costs that link, not the pen.
+                    if self.app_streams[index].tcp.write_all(&self.buffer[..len]).is_err() {
+                        self.close_app_stream(index);
+                    }
+                }
+                Ok(())
+            }
+            A_OKAY => {
+                if let Some(stream) = self.app_streams.iter().find(|s| s.local == header.arg1) {
+                    stream.can_send.store(true, Ordering::Release);
+                }
+                Ok(())
+            }
+            A_CLSE => {
+                if let Some(index) = self.app_streams.iter().position(|s| s.local == header.arg1) {
+                    self.app_streams.remove(index);
+                }
+                Ok(())
+            }
+            A_CNXN => Err(io::Error::new(io::ErrorKind::ConnectionReset, "the tablet restarted its USB connection")),
+            _ => Ok(()),
+        }
+    }
+
+    fn close_app_stream(&mut self, index: usize) {
+        let stream = self.app_streams.remove(index);
+        let _ = self.pipes.send(A_CLSE, stream.local, stream.remote, &[]);
+    }
+
+    /// The tablet app connected. Passes it to the local port it expects to reach.
+    fn open_app_stream(&mut self, remote: u32) -> io::Result<()> {
+        let local = self.next_app_stream;
+        self.next_app_stream += 1;
+        let tcp = match TcpStream::connect((Ipv4Addr::LOCALHOST, self.app_port)) {
+            Ok(tcp) => tcp,
+            Err(_) => return self.pipes.send(A_CLSE, 0, remote, &[]),
+        };
+        let _ = tcp.set_nodelay(true);
+        let _ = tcp.set_write_timeout(Some(APP_WRITE_TIMEOUT));
+        let mut reader = tcp.try_clone()?;
+        let can_send = Arc::new(AtomicBool::new(true));
+        self.pipes.send(A_OKAY, local, remote, &[])?;
+        self.app_streams.push(AppStream { local, remote, tcp, can_send: can_send.clone() });
+
+        let (pipes, closed) = (self.pipes.clone(), self.closed.clone());
+        std::thread::spawn(move || {
+            let mut chunk = [0u8; 4096];
+            while let Ok(n) = reader.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+                while !can_send.swap(false, Ordering::AcqRel) {
+                    if closed.load(Ordering::Relaxed) {
+                        return;
+                    }
+                    std::thread::sleep(Duration::from_millis(1));
+                }
+                if pipes.send(A_WRTE, local, remote, &chunk[..n]).is_err() {
+                    return;
+                }
+            }
+            let _ = pipes.send(A_CLSE, local, remote, &[]);
+        });
+        Ok(())
+    }
+
+    /// Says goodbye, so the helper exits and Android gets the pen back straight away.
+    pub fn close(&mut self) {
+        self.closed.store(true, Ordering::Relaxed);
+        for stream in self.app_streams.drain(..) {
+            let _ = stream.tcp.shutdown(std::net::Shutdown::Both);
+            let _ = self.pipes.send(A_CLSE, stream.local, stream.remote, &[]);
+        }
+        let _ = self.pipes.send(A_CLSE, PEN_STREAM, self.remote_pen, &[]);
+    }
+}
+
+impl Drop for DirectLink {
+    fn drop(&mut self) {
+        self.closed.store(true, Ordering::Relaxed);
+        for stream in self.app_streams.drain(..) {
+            let _ = stream.tcp.shutdown(std::net::Shutdown::Both);
+        }
+    }
+}
+
 /// Measures round trips through the helper over this direct path, to compare with `--ping-bench`.
 pub fn bench(seconds: u64) -> io::Result<()> {
-    use osutab_core::{DownFrame, UpFrame, DOWN_FRAME_LEN};
-    const HELPER_STREAM: u32 = 1;
-    const PEN_STREAM: u32 = 2;
     const PERIOD: Duration = Duration::from_micros(2080);
 
     let pipes = Arc::new(UsbPipes::open()?);
@@ -306,7 +571,7 @@ pub fn bench(seconds: u64) -> io::Result<()> {
 
     let clock = Instant::now();
     let credit = Arc::new(AtomicU32::new(1));
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let stop = Arc::new(AtomicBool::new(false));
     let writer = {
         let (pipes, credit, stop) = (pipes.clone(), credit.clone(), stop.clone());
         std::thread::spawn(move || -> io::Result<()> {

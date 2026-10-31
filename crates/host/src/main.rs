@@ -19,6 +19,7 @@ mod selftest;
 mod settings;
 mod shared;
 mod stats;
+mod theme;
 mod trace;
 mod tray;
 mod usbadb;
@@ -39,12 +40,15 @@ use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_
 use adb::Adb;
 use engine::EngineOptions;
 use mapping::{Rect, Rotation};
-use settings::Settings;
+use settings::{Settings, UsbPath};
 use shared::{Overrides, Shared};
 
 // Lets the console handler reach the stop flag.
 static SHARED: AtomicPtr<Shared> = AtomicPtr::new(std::ptr::null_mut());
 const KEPT_LOGS: usize = 30;
+const DISPLAY_CHECK: Duration = Duration::from_secs(1);
+// How long quitting waits for the direct USB link to say goodbye, so the pen comes straight back.
+const DIRECT_CLOSE_WAIT: Duration = Duration::from_millis(400);
 
 struct Config {
     adb: Option<PathBuf>,
@@ -67,13 +71,14 @@ struct Config {
     sendinput_bench: Option<u64>,
     otd_bench: Option<u64>,
     usb_bench: Option<u64>,
+    usb_path: Option<UsbPath>,
     tab: gui::Tab,
 }
 
 const USAGE: &str = "osutab [--setup] [--no-gui] [--no-app] [--self-test] [--test-mode] [--busy-poll] [--helper-busy] [--ping-bench]
        [--stall-trace DIR] [--ping-ms MS] [--burst ON_MS OFF_MS] [--sendinput-bench SECONDS] [--tab NAME]
        [--rotation 0|90|180|270] [--duration SECONDS] [--no-tip-click] [--button-key KEY]
-       [--no-grab] [--dry-run] [--adb PATH] [--helper PATH]";
+       [--no-grab] [--dry-run] [--adb PATH] [--helper PATH] [--usb-path adb|direct]";
 
 fn parse_args() -> Result<Config, String> {
     let mut c = Config {
@@ -97,6 +102,7 @@ fn parse_args() -> Result<Config, String> {
         sendinput_bench: None,
         otd_bench: None,
         usb_bench: None,
+        usb_path: None,
         tab: gui::Tab::Play,
     };
     let mut args = std::env::args().skip(1);
@@ -142,6 +148,10 @@ fn parse_args() -> Result<Config, String> {
             }
             "--otd-bench" => c.otd_bench = Some(value()?.parse().map_err(|_| "invalid --otd-bench".to_string())?),
             "--usb-bench" => c.usb_bench = Some(value()?.parse().map_err(|_| "invalid --usb-bench".to_string())?),
+            "--usb-path" => {
+                let name = value()?;
+                c.usb_path = Some(UsbPath::parse(&name).ok_or(format!("unknown USB path {name}"))?);
+            }
             "--stall-trace" => c.stall_trace = Some(value()?.into()),
             "--ping-ms" => c.ping_ms = Some(value()?.parse().map_err(|_| "invalid --ping-ms".to_string())?),
             "--burst" => {
@@ -189,12 +199,26 @@ fn find_app(exe_dir: &Path, data_dir: &Path) -> Option<PathBuf> {
     })
 }
 
+/// Reads the saved settings. A file with problems is copied first, because saving replaces it, and
+/// the returned message says what happened.
+fn read_saved_settings(path: &Path) -> (Option<Settings>, Option<String>) {
+    let copy_note = || match settings::back_up(path) {
+        Ok(copy) => format!("A copy of the old file is at {}.", copy.display()),
+        Err(e) => format!("A copy of the old file couldn't be made: {e}."),
+    };
+    match settings::load(path) {
+        Ok(None) => (None, None),
+        Ok(Some(parsed)) if parsed.problems.is_empty() => (Some(parsed.settings), None),
+        Ok(Some(parsed)) => {
+            let note = format!("Some settings couldn't be read, so they went back to their defaults: {}. {}", parsed.problems.join("; "), copy_note());
+            (Some(parsed.settings), Some(note))
+        }
+        Err(e) => (None, Some(format!("The settings file couldn't be read ({e}), so setup is starting again. {}", copy_note()))),
+    }
+}
+
 /// The saved settings, and whether they are ready to use without asking first.
-fn load_settings(config: &Config, target: &Rect, path: &Path) -> (Settings, bool) {
-    let saved = settings::load(path).unwrap_or_else(|e| {
-        eprintln!("ignoring {}: {e}", path.display());
-        None
-    });
+fn load_settings(config: &Config, target: &Rect, path: &Path, saved: Option<Settings>) -> (Settings, bool) {
     if !config.setup {
         if let Some(saved) = saved {
             println!("using settings from {}", path.display());
@@ -327,12 +351,19 @@ fn main() {
     let data_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
     let adb = Adb::new(find_adb(&config, &exe_dir));
+    let adb_at_exit = adb.clone();
     let Some(helper) = find_helper(&config, &exe_dir, &data_dir) else {
         fatal("The tablet helper is missing from this build. Run build.ps1 to rebuild osutab.");
     };
 
-    let (loaded, ready) = load_settings(&config, &target, &path);
+    let (saved, settings_note) = read_saved_settings(&path);
+    if let Some(note) = &settings_note {
+        eprintln!("{note}");
+    }
+    let (loaded, ready) = load_settings(&config, &target, &path, saved);
     let shared = Arc::new(Shared::new(loaded, path.clone(), config.overrides, target, ready));
+    *shared.notice.lock().unwrap() = settings_note;
+    shared.set_display(target, inject::virtual_desktop());
     shared.test_mode.store(config.test_mode, Ordering::SeqCst);
     SHARED.store(Arc::into_raw(shared.clone()) as *mut Shared, Ordering::SeqCst);
     unsafe { SetConsoleCtrlHandler(Some(on_console_signal), 1) };
@@ -354,6 +385,7 @@ fn main() {
         stall_trace: config.stall_trace.clone(),
         ping_ms: config.ping_ms,
         burst: config.burst,
+        usb_path: config.usb_path,
     };
     if options.app.is_none() && !config.no_app {
         println!("tablet app not found; run build.ps1 to build it");
@@ -361,6 +393,14 @@ fn main() {
     {
         let shared = shared.clone();
         std::thread::spawn(move || control::run(shared));
+    }
+    {
+        // A changed resolution or main monitor would otherwise leave the mapping out of date.
+        let shared = shared.clone();
+        std::thread::spawn(move || loop {
+            std::thread::sleep(DISPLAY_CHECK);
+            shared.set_display(inject::primary_display(), inject::virtual_desktop());
+        });
     }
     {
         let shared = shared.clone();
@@ -401,6 +441,13 @@ fn main() {
             shared.stats.report_loop(log);
             inject::release_all();
             let _ = shared.save_settings();
+            let closing = Instant::now();
+            while shared.direct_active.load(Ordering::SeqCst) && closing.elapsed() < DIRECT_CLOSE_WAIT {
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            if shared.pinned.load(Ordering::SeqCst) {
+                let _ = adb_at_exit.unpin_app();
+            }
             if let Some(mut daemon) = shared.otd_daemon.lock().unwrap().take() {
                 let _ = daemon.kill();
             }

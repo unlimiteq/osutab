@@ -178,7 +178,9 @@ fn send_sample(sock: &mut UnixStream, mut sample: Sample) -> io::Result<()> {
     sock.write_all(&DownFrame::Sample(sample).encode())
 }
 
-fn serve(pen: &mut File, sock: &mut UnixStream, busy: bool) -> io::Result<()> {
+/// `ping_timeout_ms` ends the session when the PC goes quiet. Direct USB needs it: unlike a closed
+/// socket, a PC program that has died sends nothing to say it's gone, which would keep the pen held.
+fn serve(pen: &mut File, sock: &mut UnixStream, busy: bool, ping_timeout_ms: Option<i32>) -> io::Result<()> {
     let hello = Hello {
         version: PROTOCOL_VERSION,
         max_x: abs_info(pen, ABS_X)?.maximum as u16,
@@ -198,7 +200,8 @@ fn serve(pen: &mut File, sock: &mut UnixStream, busy: bool) -> io::Result<()> {
         PollFd { fd: sock.as_raw_fd(), events: POLLIN, revents: 0 },
     ];
     // Busy mode trades tablet battery and heat for a possibly faster wake-up.
-    let timeout = if busy { 0 } else { -1 };
+    let timeout = if busy { 0 } else { ping_timeout_ms.unwrap_or(-1) };
+    let mut last_ping_ns = monotonic_ns();
     loop {
         if unsafe { poll(fds.as_mut_ptr(), 2, timeout) } < 0 {
             let err = io::Error::last_os_error();
@@ -228,10 +231,18 @@ fn serve(pen: &mut File, sock: &mut UnixStream, busy: bool) -> io::Result<()> {
         }
         if fds[1].revents != 0 {
             sock.read_exact(&mut up)?;
+            if ping_timeout_ms.is_some() {
+                last_ping_ns = monotonic_ns();
+            }
             if let Some(UpFrame::Ping { host_ns }) = UpFrame::decode(&up) {
                 let tablet_gap_us = WATCHDOG_MAX_GAP_US.swap(0, Ordering::Relaxed);
                 let pong = Pong { echo_ns: host_ns, device_ns: monotonic_ns(), tablet_gap_us };
                 sock.write_all(&DownFrame::Pong(pong).encode())?;
+            }
+        }
+        if let Some(limit) = ping_timeout_ms {
+            if monotonic_ns().saturating_sub(last_ping_ns) > limit as u64 * 1_000_000 {
+                return Err(io::ErrorKind::UnexpectedEof.into());
             }
         }
     }
@@ -245,6 +256,7 @@ fn run() -> io::Result<()> {
     let burst = args.iter().position(|a| a == "--burst").and_then(|i| {
         Some((args.get(i + 1)?.parse::<u64>().ok()?, args.get(i + 2)?.parse::<u64>().ok()?))
     });
+    let ping_timeout_ms = args.iter().position(|a| a == "--ping-timeout-ms").and_then(|i| args.get(i + 1)?.parse::<i32>().ok());
     let mut pen = find_pen()?;
     let fd = pen.as_raw_fd();
     let clock = CLOCK_MONOTONIC;
@@ -271,7 +283,7 @@ fn run() -> io::Result<()> {
     if let Some((on_ms, off_ms)) = burst {
         start_bursts(&sock, on_ms, off_ms)?;
     }
-    serve(&mut pen, &mut sock, busy)
+    serve(&mut pen, &mut sock, busy, ping_timeout_ms)
 }
 
 fn main() {

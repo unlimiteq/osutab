@@ -67,6 +67,11 @@ impl Adb {
         self.output(&["start-server"]).map(|_| ())
     }
 
+    /// Lets go of the USB interface, so this program can open it directly.
+    pub fn kill_server(&self) -> io::Result<()> {
+        self.output(&["kill-server"]).map(|_| ())
+    }
+
     pub fn device_state(&self) -> DeviceState {
         match self.command().arg("get-state").stdin(Stdio::null()).output() {
             Ok(out) => parse_state(&String::from_utf8_lossy(&out.stdout), &String::from_utf8_lossy(&out.stderr)),
@@ -112,6 +117,18 @@ impl Adb {
         self.output(&["shell", &format!("am start -n {APP_PACKAGE}/.MainActivity")]).map(|_| ())
     }
 
+    /// Pins the tablet app, which blocks Home and Back. Android allows this from adb's shell.
+    pub fn pin_app(&self) -> io::Result<()> {
+        let dump = self.output(&["shell", "dumpsys activity activities"])?;
+        let task = parse_app_task(&dump).ok_or_else(|| io::Error::other("the tablet app isn't running"))?;
+        self.output(&["shell", &format!("cmd activity task lock {task}")]).map(|_| ())
+    }
+
+    /// On this tablet, this also sends it to its lock screen.
+    pub fn unpin_app(&self) -> io::Result<()> {
+        self.output(&["shell", "cmd activity task lock stop"]).map(|_| ())
+    }
+
     pub fn spawn_helper(&self, args: &str) -> io::Result<Child> {
         let command = format!("pkill -x osutab-helper; exec {REMOTE_HELPER} {args}");
         let mut child = self
@@ -138,6 +155,14 @@ impl Adb {
     }
 }
 
+/// Finds the tablet app's task id in `dumpsys activity activities`.
+fn parse_app_task(dump: &str) -> Option<u32> {
+    let line = dump.lines().find(|l| l.contains("Task{") && l.contains(APP_PACKAGE))?;
+    let rest = &line[line.find('#')? + 1..];
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    digits.parse().ok()
+}
+
 fn parse_rotation(dump: &str) -> Option<Rotation> {
     let line = dump.lines().find(|l| l.contains("Viewport INTERNAL"))?;
     let rest = &line[line.find("orientation=")? + "orientation=".len()..];
@@ -153,6 +178,13 @@ mod tests {
     fn parses_real_viewport_line() {
         let dump = "      Viewports:\n        Viewport INTERNAL: displayId=0, uniqueId=local:46, port=130, orientation=1, logicalFrame=[0, 0, 2960, 1848], isActive=[1]\n";
         assert_eq!(parse_rotation(dump), Some(Rotation::R90));
+    }
+
+    #[test]
+    fn finds_the_apps_task() {
+        let dump = "    * Task{4c1 #12 type=standard A=2000:com.other}\n    * Task{9f2 #57 type=standard A=2000:dev.osutab.app}\n";
+        assert_eq!(parse_app_task(dump), Some(57));
+        assert_eq!(parse_app_task("nothing useful"), None);
     }
 
     #[test]
