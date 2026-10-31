@@ -69,17 +69,24 @@ data class AreaState(
         copy(offsetX = offsetX + dx, offsetY = offsetY + dy).fitted()
 
     /** Pinch: scales about the centre. A locked area keeps the screen's shape. */
-    fun scaledBy(factor: Double): AreaState = withSize(width * factor, height * factor)
+    fun scaledBy(factor: Double): AreaState =
+        if (aspectLock) withLockedWidth(width * factor) else copy(width = width * factor, height = height * factor).fitted()
 
-    /** Sets a size, keeping the screen's shape when locked and the wider change decides. */
-    fun withSize(newWidth: Double, newHeight: Double): AreaState {
+    /**
+     * Dragging a corner. A locked area scales by the larger of the two directions compared with
+     * its size when the drag began. Comparing with the current size instead makes the choice flip
+     * between directions from one touch to the next, and the area visibly shakes.
+     */
+    fun resizedFromCorner(newWidth: Double, newHeight: Double, startWidth: Double, startHeight: Double): AreaState {
         if (!aspectLock) return copy(width = newWidth, height = newHeight).fitted()
-        val fromWidth = abs(newWidth - width) / width
-        val fromHeight = abs(newHeight - height) / height
-        var w = if (fromWidth >= fromHeight) newWidth else newHeight * screenAspect
+        return withLockedWidth(startWidth * max(newWidth / startWidth, newHeight / startHeight))
+    }
+
+    private fun withLockedWidth(wanted: Double): AreaState {
         // Both limits apply to the same shape, so take whichever is tighter.
-        w = min(w, min(tabletWidth, tabletHeight * screenAspect))
-        w = max(w, max(MIN_AREA_MM, MIN_AREA_MM * screenAspect))
+        val w = wanted
+            .coerceAtMost(min(tabletWidth, tabletHeight * screenAspect))
+            .coerceAtLeast(max(MIN_AREA_MM, MIN_AREA_MM * screenAspect))
         return copy(width = w, height = w / screenAspect).fitted()
     }
 

@@ -5,6 +5,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.os.SystemClock
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import kotlin.math.abs
@@ -19,25 +21,38 @@ import kotlin.math.sin
 class AreaView(
     context: Context,
     private val onEdit: (AreaState) -> Unit,
+    private val onEditingChanged: (Boolean) -> Unit,
 ) : View(context) {
     var state = AreaState()
         set(value) {
-            field = value
-            invalidate()
+            if (field != value) {
+                field = value
+                invalidate()
+            }
         }
+
+    /** Editing needs the PC, so losing the connection ends it and shows one steady message. */
     var connected = false
         set(value) {
+            if (field == value) return
             field = value
+            if (!value) {
+                removeCallbacks(enterEditing)
+                setEditing(false)
+            }
             invalidate()
         }
     var showOutline = true
         set(value) {
-            field = value
-            invalidate()
+            if (field != value) {
+                field = value
+                invalidate()
+            }
         }
 
-    /** True while a finger is changing the area, when updates from the PC would fight it. */
-    val gestureActive: Boolean get() = gesture != Gesture.NONE
+    /** True while updates from the PC would fight the area's own edits. */
+    val holdsArea: Boolean
+        get() = gesture != Gesture.NONE || SystemClock.uptimeMillis() - lastEditAt < ECHO_GUARD_MS
 
     private var editing = false
 
@@ -68,6 +83,9 @@ class AreaView(
     private var lastX = 0f
     private var lastY = 0f
     private var pinchDistance = 0f
+    private var startWidth = 0.0
+    private var startHeight = 0.0
+    private var lastEditAt = 0L
 
     private val enterEditing = Runnable { setEditing(true) }
     private val leaveEditing = Runnable { setEditing(false) }
@@ -76,17 +94,22 @@ class AreaView(
 
     override fun onDraw(canvas: Canvas) {
         canvas.drawColor(outsidePaint)
+        if (!connected) {
+            drawCentred(canvas, "Waiting for the PC", height / 2f - 10f, textPaint)
+            drawCentred(canvas, "Start osutab on your computer. You can edit the area once it connects.", height / 2f + 30f, smallPaint)
+            return
+        }
         val scale = pxPerMm.toFloat()
         if (showOutline || editing) {
             val corners = state.corners().map { (it.first * scale).toFloat() to (it.second * scale).toFloat() }
-            areaPath.reset()
+            areaPath.rewind()
             areaPath.moveTo(corners[0].first, corners[0].second)
-            corners.drop(1).forEach { areaPath.lineTo(it.first, it.second) }
+            for (i in 1 until corners.size) areaPath.lineTo(corners[i].first, corners[i].second)
             areaPath.close()
             canvas.drawPath(areaPath, fillPaint)
             canvas.drawPath(areaPath, outlinePaint)
             if (editing) {
-                corners.forEach { canvas.drawCircle(it.first, it.second, HANDLE_RADIUS_PX, handlePaint) }
+                for (corner in corners) canvas.drawCircle(corner.first, corner.second, HANDLE_RADIUS_PX, handlePaint)
             }
             val cx = (state.centerX * scale).toFloat()
             val cy = (state.centerY * scale).toFloat()
@@ -96,29 +119,26 @@ class AreaView(
             canvas.drawText(detail, cx - smallPaint.measureText(detail) / 2, cy + 28f, smallPaint)
             canvas.drawText(state.preset, cx - smallPaint.measureText(state.preset) / 2, cy + 62f, smallPaint)
         }
-        if (!connected) {
-            val message = "Waiting for the PC. Start osutab on your computer."
-            val hint = "The S Pen works normally on this tablet until osutab connects."
-            canvas.drawText(message, (width - textPaint.measureText(message)) / 2, 60f, textPaint)
-            canvas.drawText(hint, (width - smallPaint.measureText(hint)) / 2, 100f, smallPaint)
-            return
-        }
         canvas.drawCircle(70f, height - 70f, 60f, buttonPaint)
-        val label = if (editing) "Done" else "Hold"
-        canvas.drawText(label, 70f - smallPaint.measureText(label) / 2, height - 61f, smallPaint)
-        if (editing) {
-            val help = "Drag to move. Drag a corner dot or pinch to resize."
-            canvas.drawText(help, (width - smallPaint.measureText(help)) / 2, 44f, smallPaint)
-        }
+        val button = if (editing) "Done" else "Hold"
+        canvas.drawText(button, 70f - smallPaint.measureText(button) / 2, height - 61f, smallPaint)
+        if (editing) drawCentred(canvas, "Drag to move. Drag a corner dot or pinch to resize.", 44f, smallPaint)
+    }
+
+    private fun drawCentred(canvas: Canvas, text: String, y: Float, paint: Paint) {
+        canvas.drawText(text, (width - paint.measureText(text)) / 2, y, paint)
     }
 
     // During play, palms and stray fingers stop here. Only holding the corner button responds.
     override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (!connected) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 if (inEditButton(event.x, event.y)) {
                     if (editing) setEditing(false) else postDelayed(enterEditing, HOLD_TO_EDIT_MS)
                 } else if (editing) {
+                    // Delivers each touch as it happens, instead of once a frame.
+                    requestUnbufferedDispatch(InputDevice.SOURCE_TOUCHSCREEN)
                     beginDrag(event)
                 }
             }
@@ -147,10 +167,14 @@ class AreaView(
     }
 
     private fun setEditing(on: Boolean) {
+        val changed = editing != on
         editing = on
         gesture = Gesture.NONE
         noteActivity()
-        invalidate()
+        if (changed) {
+            onEditingChanged(on)
+            invalidate()
+        }
     }
 
     /** Edit mode ends by itself, so a forgotten edit can't let a palm move the area in play. */
@@ -164,6 +188,8 @@ class AreaView(
     private fun beginDrag(e: MotionEvent) {
         lastX = e.x
         lastY = e.y
+        startWidth = state.width
+        startHeight = state.height
         val scale = pxPerMm
         val nearCorner = state.corners().any { (x, y) ->
             hypot(x * scale - e.x, y * scale - e.y) <= HANDLE_RADIUS_PX * 3
@@ -189,7 +215,7 @@ class AreaView(
                 val dy = e.y / scale - state.centerY
                 val along = abs(dx * cos(r) + dy * sin(r))
                 val across = abs(-dx * sin(r) + dy * cos(r))
-                apply(state.withSize(along * 2, across * 2))
+                apply(state.resizedFromCorner(along * 2, across * 2, startWidth, startHeight))
             }
             Gesture.PINCH -> {
                 if (e.pointerCount >= 2 && pinchDistance > 0f) {
@@ -204,6 +230,7 @@ class AreaView(
 
     private fun apply(next: AreaState) {
         noteActivity()
+        lastEditAt = SystemClock.uptimeMillis()
         if (next != state) {
             state = next
             onEdit(next)
@@ -215,5 +242,6 @@ class AreaView(
         const val BUTTON_SIZE_PX = 150f
         const val HOLD_TO_EDIT_MS = 1000L
         const val EDIT_TIMEOUT_MS = 20_000L
+        const val ECHO_GUARD_MS = 500L
     }
 }

@@ -27,8 +27,11 @@ class MainActivity : Activity() {
     private lateinit var view: AreaView
     private val main = Handler(Looper.getMainLooper())
     private val outgoing = LinkedBlockingQueue<String>()
-    @Volatile private var running = false
-    private var worker: Thread? = null
+    private var link: Link? = null
+
+    // A brief drop shouldn't flash the screen, so the waiting message only shows after this.
+    private val showDisconnected = Runnable { view.connected = false }
+    private val hideBars = Runnable { hideSystemBars() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,26 +39,35 @@ class MainActivity : Activity() {
         window.attributes = window.attributes.apply {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
-        view = AreaView(this) { edited -> outgoing.offer(edited.toLine()) }
+        view = AreaView(this, onEdit = { edited -> outgoing.offer(edited.toLine()) }, onEditingChanged = ::setSmoothMotion)
         setContentView(view)
         // Stops edge swipes from a resting palm opening the system's gestures where Android allows.
         view.addOnLayoutChangeListener { v: View, l, t, r, b, _, _, _, _ ->
             v.systemGestureExclusionRects = listOf(Rect(0, 0, r - l, b - t))
+        }
+        // Android lets a swipe from the edge bring the bars back, and no ordinary app can stop that.
+        // This sends them away again as soon as they appear.
+        view.setOnApplyWindowInsetsListener { v, insets ->
+            // Checked one at a time: systemBars() also includes the caption bar, which never shows
+            // here, and isVisible only says yes when every type asked about is visible.
+            if (insets.isVisible(WindowInsets.Type.navigationBars()) || insets.isVisible(WindowInsets.Type.statusBars())) {
+                main.removeCallbacks(hideBars)
+                main.postDelayed(hideBars, REHIDE_MS)
+            }
+            v.onApplyWindowInsets(insets)
         }
     }
 
     override fun onResume() {
         super.onResume()
         hideSystemBars()
-        running = true
-        worker = Thread(::connectLoop, "osutab-link").also { it.start() }
+        link = Link().also { it.start() }
     }
 
     override fun onPause() {
         super.onPause()
-        running = false
-        worker?.interrupt()
-        worker = null
+        link?.shutdown()
+        link = null
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
@@ -66,93 +78,138 @@ class MainActivity : Activity() {
     private fun hideSystemBars() {
         window.setDecorFitsSystemWindows(false)
         window.insetsController?.let {
+            // With the default behaviour the bars really appear when swiped, which reports them to
+            // this app. The transient behaviour hides that, leaving them up for several seconds.
+            it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_DEFAULT
             it.hide(WindowInsets.Type.systemBars())
-            it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        }
+    }
+
+    /** Edit mode runs at the display's top rate so dragging is smooth. Play doesn't need the power. */
+    private fun setSmoothMotion(on: Boolean) {
+        window.attributes = window.attributes.apply {
+            preferredRefreshRate = if (on) display?.supportedModes?.maxOfOrNull { it.refreshRate } ?: 0f else 0f
         }
     }
 
     private fun applyOrientation(rotation: Int) {
-        requestedOrientation = when (rotation) {
+        val wanted = when (rotation) {
             0 -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
             90 -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
             180 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_PORTRAIT
             270 -> ActivityInfo.SCREEN_ORIENTATION_REVERSE_LANDSCAPE
             else -> ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
         }
+        if (requestedOrientation != wanted) requestedOrientation = wanted
     }
 
-    private fun connectLoop() {
-        while (running) {
-            try {
-                Socket().use { socket ->
-                    socket.tcpNoDelay = true
-                    socket.connect(InetSocketAddress("127.0.0.1", PC_PORT), 1000)
-                    main.post { view.connected = true }
-                    val reader = BufferedReader(InputStreamReader(socket.getInputStream()))
-                    val writer = BufferedWriter(OutputStreamWriter(socket.getOutputStream()))
-                    val sender = Thread({
-                        try {
-                            while (true) {
-                                var line = outgoing.take()
-                                // Only the newest size matters while a finger is moving.
-                                while (true) line = outgoing.poll() ?: break
-                                writer.write(line)
-                                writer.write("\n")
-                                writer.flush()
-                            }
-                        } catch (_: Exception) {
-                        }
-                    }, "osutab-send")
-                    sender.start()
-                    try {
-                        while (running) {
-                            val line = reader.readLine() ?: break
-                            handleLine(line)
-                        }
-                    } finally {
-                        sender.interrupt()
-                    }
-                }
-            } catch (_: Exception) {
-            }
-            main.post { view.connected = false }
-            if (running) {
-                try {
-                    Thread.sleep(RECONNECT_MS)
-                } catch (_: InterruptedException) {
-                    return
-                }
-            }
-        }
+    /** Runs on the main thread. A connection only counts once the PC has really said something. */
+    private fun onPcSpoke() {
+        main.removeCallbacks(showDisconnected)
+        view.connected = true
+    }
+
+    private fun onPcGone() {
+        main.removeCallbacks(showDisconnected)
+        main.postDelayed(showDisconnected, DISCONNECT_GRACE_MS)
     }
 
     private fun handleLine(line: String) {
         when {
             line.startsWith("state ") -> AreaState.parse(line)?.let { state ->
-                main.post {
-                    // Don't let an echo of an earlier edit fight a finger that's still moving.
-                    val current = view.state
-                    view.state = if (view.gestureActive) {
-                        state.copy(
-                            width = current.width,
-                            height = current.height,
-                            offsetX = current.offsetX,
-                            offsetY = current.offsetY,
-                            rotationDeg = current.rotationDeg,
-                        )
-                    } else {
-                        state
+                val current = view.state
+                // Don't let an echo of an earlier edit fight a finger, or undo where it stopped.
+                view.state = if (view.holdsArea) {
+                    state.copy(
+                        width = current.width,
+                        height = current.height,
+                        offsetX = current.offsetX,
+                        offsetY = current.offsetY,
+                        rotationDeg = current.rotationDeg,
+                    )
+                } else {
+                    state
+                }
+                applyOrientation(state.orientation)
+            }
+            line == "outline 1" -> view.showOutline = true
+            line == "outline 0" -> view.showOutline = false
+        }
+    }
+
+    /** One connection attempt loop. Only one exists at a time, even across pausing and resuming. */
+    private inner class Link : Thread("osutab-link") {
+        @Volatile private var stopped = false
+        @Volatile private var socket: Socket? = null
+
+        fun shutdown() {
+            stopped = true
+            try {
+                socket?.close()
+            } catch (_: Exception) {
+            }
+            interrupt()
+        }
+
+        override fun run() {
+            while (!stopped) {
+                var spoke = false
+                try {
+                    Socket().use { s ->
+                        socket = s
+                        s.tcpNoDelay = true
+                        s.connect(InetSocketAddress("127.0.0.1", PC_PORT), CONNECT_TIMEOUT_MS)
+                        val reader = BufferedReader(InputStreamReader(s.getInputStream()))
+                        val writer = BufferedWriter(OutputStreamWriter(s.getOutputStream()))
+                        val sender = startSender(writer)
+                        try {
+                            while (!stopped) {
+                                val line = reader.readLine() ?: break
+                                if (!spoke) {
+                                    spoke = true
+                                    main.post { onPcSpoke() }
+                                }
+                                main.post { handleLine(line) }
+                            }
+                        } finally {
+                            sender.interrupt()
+                        }
                     }
-                    applyOrientation(state.orientation)
+                } catch (_: Exception) {
+                }
+                if (spoke) main.post { onPcGone() }
+                if (stopped) return
+                try {
+                    sleep(RECONNECT_MS)
+                } catch (_: InterruptedException) {
+                    return
                 }
             }
-            line == "outline 1" -> main.post { view.showOutline = true }
-            line == "outline 0" -> main.post { view.showOutline = false }
+        }
+
+        private fun startSender(writer: BufferedWriter): Thread {
+            outgoing.clear()
+            return Thread({
+                try {
+                    while (true) {
+                        var line = outgoing.take()
+                        // Only the newest size matters while a finger is moving.
+                        while (true) line = outgoing.poll() ?: break
+                        writer.write(line)
+                        writer.write("\n")
+                        writer.flush()
+                    }
+                } catch (_: Exception) {
+                }
+            }, "osutab-send").also { it.start() }
         }
     }
 
     companion object {
         const val PC_PORT = 27192
         const val RECONNECT_MS = 500L
+        const val CONNECT_TIMEOUT_MS = 1000
+        const val DISCONNECT_GRACE_MS = 1500L
+        const val REHIDE_MS = 150L
     }
 }

@@ -52,9 +52,25 @@ class AreaStateTest {
 
     @Test
     fun unlockedSizesAreIndependent() {
-        val s = area.copy(aspectLock = false).withSize(120.0, 40.0)
+        val s = area.copy(aspectLock = false).resizedFromCorner(120.0, 40.0, 100.0, 62.5)
         assertEquals(120.0, s.width, 1e-9)
         assertEquals(40.0, s.height, 1e-9)
+    }
+
+    @Test
+    fun cornerDragDoesNotShakeWhenDirectionsDisagree() {
+        // A finger moving along a line that isn't the area's diagonal, so width and height pull
+        // differently. Each step must grow steadily: the old code flipped between the two.
+        var s = area
+        var previous = s.width
+        for (i in 1..40) {
+            val width = 100.0 + i * 1.0
+            val height = 62.5 + i * 0.9
+            s = s.resizedFromCorner(width, height, 100.0, 62.5)
+            assertTrue("step $i went from $previous to ${s.width}", s.width >= previous)
+            assertEquals(1.6, s.width / s.height, 1e-9)
+            previous = s.width
+        }
     }
 
     @Test
