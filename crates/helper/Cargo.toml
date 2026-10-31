@@ -1,0 +1,7 @@
+[package]
+name = "osutab-helper"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+osutab-core = { path = "../core" }

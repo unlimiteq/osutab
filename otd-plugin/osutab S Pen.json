@@ -1,0 +1,23 @@
+{
+  "Name": "osutab S Pen",
+  "Specifications": {
+    "Digitizer": {
+      "Width": 313.76,
+      "Height": 195.89,
+      "MaxX": 31376,
+      "MaxY": 19589
+    },
+    "Pen": {
+      "MaxPressure": 4095,
+      "ButtonCount": 1
+    }
+  },
+  "DigitizerIdentifiers": [
+    {
+      "VendorID": 4617,
+      "ProductID": 1,
+      "InputReportLength": 32,
+      "ReportParser": "OsutabBridge.OsutabReportParser"
+    }
+  ]
+}

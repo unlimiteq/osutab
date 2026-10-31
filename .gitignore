@@ -1,0 +1,21 @@
+# Build output
+target/
+dist/
+bin/
+obj/
+android/.gradle/
+android/build/
+android/app/build/
+android/.kotlin/
+
+# Local toolchains and third-party source
+tools/
+
+# Machine-specific and private
+android/local.properties
+*.jks
+*.keystore
+adbkey
+adbkey.pub
+*.pem
+*.pfx

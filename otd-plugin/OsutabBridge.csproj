@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <AssemblyName>OsutabBridge</AssemblyName>
+    <RootNamespace>OsutabBridge</RootNamespace>
+    <!-- Plugins are loaded by the daemon, which supplies the plugin API itself. -->
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <EnableDefaultCompileItems>false</EnableDefaultCompileItems>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Compile Include="src\**\*.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\tools\otd-src\OpenTabletDriver.Plugin\OpenTabletDriver.Plugin.csproj" Private="false" />
+  </ItemGroup>
+
+</Project>
