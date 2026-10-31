@@ -18,7 +18,7 @@ The **Play** tab checks all of this and tells you what's left. When it says "Rea
 
 Closing the window keeps osutab running in the tray, so it's out of the way while you play. Click the tray icon to bring it back. **Quit**, in the window or the tray menu, stops osutab and gives the pen back to Android. Starting osutab again while it's running just brings up its window.
 
-Unplugging and replugging recovers by itself. Settings are saved as you change them, and changes apply straight away.
+Unplugging and replugging recovers by itself, and so does changing your resolution or main monitor. Settings are saved as you change them.
 
 ### Before you play
 
@@ -29,13 +29,44 @@ Unplugging and replugging recovers by itself. Settings are saved as you change t
 
 The tablet app opens by itself and shows your pen area, its size in mm and the on-screen sensitivity. If the pen goes outside the area, the cursor stays pinned to the screen's edge.
 
-To edit with your fingers, hold the circle in the corner for a second. Then drag inside the area to move it, and drag a corner dot or pinch to resize it. Tap the circle when you're done. Edit mode also ends after 20 seconds without changes, so a palm can't move the area during play.
+To edit with your fingers, hold the circle in the corner until its ring fills, which takes a second unless you change it. Then drag inside the area to move it, and drag a corner dot or pinch to resize it. Tap the circle when you're done. Edit mode also ends after 20 seconds without changes, or the time you set, so a palm can't move the area during play.
 
 Editing needs the PC, because that's where the area is saved. While osutab isn't connected, the tablet says so and ignores touches.
 
 While osutab runs, Android can't detect the pen, so its palm rejection is off. The app takes every touch itself, so a palm can't press anything in it. Samsung's floating S Pen icon can still be touched. To remove it, turn it off in Settings > Advanced features > S Pen > Air command.
 
-The system bars stay hidden during normal use, but Android doesn't let an ordinary app block them completely. A swipe from the screen's edge brings them back, and the app hides them again about 150 ms later. The Home button can be pressed in that moment. Android's screen pinning does block Home and Back, but osutab doesn't turn it on, because on this tablet leaving it sends you to the lock screen.
+The system bars stay hidden during normal use, but Android doesn't let an ordinary app block them completely. A swipe from the screen's edge brings them back, and the app hides them again about 150 ms later. The Home button can be pressed in that moment. To block Home and Back, turn on **Pin the app** on the Settings tab. It's off by default, because on this tablet leaving a pinned app sends you to the lock screen, so quitting osutab means entering your PIN.
+
+### Themes
+
+The **Appearance** tab has five built-in themes: Midnight, Daylight, OLED Black, Candy and High Contrast. A theme applies to the PC and the tablet straight away, and survives restarts.
+
+You can change the colors, the area's outline color and thickness, and how dark the tablet is outside the area. Each has a Reset button. **Save as my theme** keeps your changes under a name. There's also a switch to turn animations off on both apps. Animations can't affect pen latency, because they run on separate threads from the pen, and the tablet app isn't in the pen's path at all.
+
+### Settings
+
+Every setting below is on the **Settings** or **Appearance** tab with its own Reset button, and in `config.toml`.
+
+| Setting | Default | Applies |
+|---|---|---|
+| `theme` | Midnight | Right away |
+| `animations` | On | Right away |
+| `color_background`, `color_panel`, `color_text`, `color_muted`, `color_accent` | From the theme | Right away |
+| `outline_color`, `outline_thickness`, `outside_dim` | From the theme | Right away |
+| `show_area_label` (size text on the tablet) | On | Right away |
+| `hold_to_edit_seconds` | 1 | Right away |
+| `edit_timeout_seconds` | 20 | Right away |
+| `close_to_tray` | On | Right away |
+| `start_minimized` | Off | Next start |
+| `open_tablet_app` (when the cable is plugged in) | On | Next connect |
+| `screen_pinning` | Off | Next connect |
+| `usb_path` (`adb` or `direct`) | `adb` | Next connect |
+
+### Direct USB
+
+Normally the pen's reports pass through `adb.exe`. **Direct USB**, on the Settings tab, reads them from the USB connection instead. It's an experiment, and the default path is the one to use: in testing it made no reliable difference to the pen. See [Reading the latency numbers](#reading-the-latency-numbers).
+
+adb.exe still does the setup, such as installing the tablet app, and then osutab stops it while the pen is in use. Anything else using adb on this PC, such as Android Studio, loses the tablet until osutab quits. If direct USB fails, osutab says so on the Play tab and uses adb.exe until the next plug-in.
 
 ### Choosing a pen area
 
@@ -111,6 +142,10 @@ A small helper runs on the tablet through adb and reads the S Pen directly from 
 
 The tablet app talks to the PC over a separate link and doesn't handle pen input, so it isn't in the pen's path.
 
+### Following the tablet's rotation
+
+With the orientation set to follow the screen, the tablet app tells the PC whenever the screen turns, and the pen's mapping changes with it. Without the app running, the rotation is only read when the tablet connects.
+
 ### Reading the latency numbers
 
 "Added latency" runs from the kernel's pen event timestamp to `SendInput` returning. It's the sum of these stages:
@@ -124,9 +159,18 @@ The tablet app talks to the PC over a separate link and doesn't handle pen input
 
 It doesn't include the S Pen's own hardware delay, the game or your display.
 
+Measured with simulated reports at 480 Hz over 40 s, three runs of each, without `SendInput`, in ms:
+
+| | Median | 99th percentile | 99.9th percentile | Worst |
+|---|---|---|---|---|
+| adb.exe | 0.66–0.69 | 1.16–1.24 | 2.6–4.3 | 12.7–13.2 |
+| Direct USB | 0.65–0.68 | 1.14–1.18 | 3.6–16.9 | 13.1–35.4 |
+
+Round trips do improve on direct USB, with the 99.9th percentile going from about 12 ms to about 3.6 ms. Those include the PC-to-tablet direction, which pen reports don't use.
+
 ## Files
 
-Settings are in `%APPDATA%\osutab\config.toml`. It's plain text, so you can edit it by hand while osutab is closed. Keep a copy first: if the file has a mistake, osutab starts with default settings and replaces the file. A latency log for each run sits next to it, and only the newest 30 are kept. The Latency tab opens that folder.
+Settings are in `%APPDATA%\osutab\config.toml`. It's plain text, so you can edit it by hand while osutab is closed. Older files keep working, and anything missing gets its default. If a line has a mistake, only that setting goes back to its default. osutab tells you which, and keeps a copy of the old file next to it as `config-problem-<number>.toml`. A latency log for each run sits next to it, and only the newest 30 are kept. The Latency tab opens that folder.
 
 ## Building from source
 
@@ -161,7 +205,8 @@ Started from a terminal, osutab prints its messages there.
 | `--no-grab` | Android keeps receiving the pen too. |
 | `--no-gui` | Runs in the console with no window, and asks setup questions there. |
 | `--no-app` | Doesn't install or open the tablet app. |
-| `--tab NAME` | Opens on a tab: `play`, `area`, `latency` or `precision`. |
+| `--tab NAME` | Opens on a tab: `play`, `area`, `latency`, `precision`, `appearance` or `settings`. |
+| `--usb-path adb\|direct` | Overrides the saved USB path for this run. |
 | `--duration SECONDS` | Stops automatically and prints a summary. |
 | `--dry-run` | Measures without injecting any input. |
 | `--test-mode` | Starts with the precision test on, with no time limit. |
