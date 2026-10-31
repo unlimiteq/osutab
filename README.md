@@ -31,7 +31,11 @@ The tablet app opens by itself and shows your pen area, its size in mm and the o
 
 To edit with your fingers, hold the circle in the corner for a second. Then drag inside the area to move it, and drag a corner dot or pinch to resize it. Tap the circle when you're done. Edit mode also ends after 20 seconds without changes, so a palm can't move the area during play.
 
-While osutab runs, Android can't detect the pen, so its palm rejection is off. The app takes every touch itself, so a palm can't press anything in it. A palm can still reach edge swipes that show the system bars, and Samsung's floating S Pen icon. To remove the icon, turn it off in Settings > Advanced features > S Pen > Air command.
+Editing needs the PC, because that's where the area is saved. While osutab isn't connected, the tablet says so and ignores touches.
+
+While osutab runs, Android can't detect the pen, so its palm rejection is off. The app takes every touch itself, so a palm can't press anything in it. Samsung's floating S Pen icon can still be touched. To remove it, turn it off in Settings > Advanced features > S Pen > Air command.
+
+The system bars stay hidden during normal use, but Android doesn't let an ordinary app block them completely. A swipe from the screen's edge brings them back, and the app hides them again about 150 ms later. The Home button can be pressed in that moment. Android's screen pinning does block Home and Back, but osutab doesn't turn it on, because on this tablet leaving it sends you to the lock screen.
 
 ### Choosing a pen area
 
@@ -61,7 +65,7 @@ Settings > Input:
 | Disable mouse buttons during gameplay | Your choice | When on, the pen tip won't hit notes, so hit with Z/X or the side button. |
 | Touch input | Off | osutab never sends touch. Turning this off stops any other touch device from adding the Touch Device mod. |
 
-Lazer's Tablet section says no tablet is detected, which is expected. osutab's own settings do that job: size, position, rotation, shape lock and presets. Making lazer detect a tablet would need a third-party kernel driver and an impersonated Wacom ID.
+Lazer's Tablet section says no tablet is detected, which is expected and happens in both output modes. Lazer has its own built-in copy of OpenTabletDriver, which only looks for real USB tablets from its built-in list and doesn't load plugins. osutab's own settings do that job: size, position, rotation, shape lock and presets. Making lazer detect a tablet would need a third-party kernel driver and an impersonated Wacom ID.
 
 ### osu!stable (not tested)
 
@@ -69,7 +73,25 @@ A starting point, in Options > Input: Raw input off, OS TabletPC support off, se
 
 ### Windows
 
-No special settings are needed. Windows Ink options and "Enhance pointer precision" don't affect absolute positioning.
+No special settings are needed. Direct mode never touches Windows Ink, so there's nothing to turn off, and "Enhance pointer precision" doesn't affect absolute positioning. In OpenTabletDriver mode, use Absolute Mode. osutab warns you if the output is set to Windows Ink.
+
+## OpenTabletDriver plugins
+
+Choose the output on the **Play** tab:
+
+| Output | Path | Use it for |
+|---|---|---|
+| **Direct** (default) | Pen > osutab > `SendInput` | The lowest latency. Filters and plugins don't apply. |
+| **OpenTabletDriver** | Pen > osutab > local socket > OpenTabletDriver > its filters > its output | OpenTabletDriver's filters and plugins. It sets the area, filters and buttons in this mode, not osutab. |
+
+osutab includes its own copy of OpenTabletDriver and a bridge plugin that presents the S Pen to it as a tablet called "osutab S Pen". It uses your normal `%LOCALAPPDATA%\OpenTabletDriver` folder, and only touches it once you choose this output. Install community plugins with OpenTabletDriver's Plugin Manager.
+
+What has been tested, using simulated pen reports:
+
+- OpenTabletDriver finds the tablet, and takes about 0.15 ms (median) from the report being sent to the cursor moving.
+- A per-report filter and a timed filter at 1000 Hz, both written for this test, load and move the cursor by the expected amount. The timed filter's median is about 0.68 ms, because it waits for its next tick.
+
+What hasn't been tested: the S Pen itself in this mode, and any community plugin. Plugins that only change position through OpenTabletDriver's filter interfaces should work. A plugin that talks to specific tablet hardware or depends on its button layout might not.
 
 ## Troubleshooting
 
@@ -80,7 +102,7 @@ No special settings are needed. Windows Ink options and "Enhance pointer precisi
 | "adb not found" | Put Google's [platform-tools](https://developer.android.com/tools/releases/platform-tools) folder next to `osutab.exe`. |
 | Jumps don't land under the pen | Turn off High precision mouse in lazer, and fix any stretched area. |
 | It feels slow | Make the pen area smaller. |
-| Occasional stutters | Close the apps listed under "Before you play". Delays of 20–85 ms can still happen in menus and just after leaving a map. None were seen during play with those apps closed. |
+| Occasional stutters | Close the apps listed under "Before you play". |
 | The pen doesn't work on the tablet itself | osutab holds the pen while it runs. Quit osutab to give it back. |
 
 ## How it works
@@ -104,7 +126,7 @@ It doesn't include the S Pen's own hardware delay, the game or your display.
 
 ## Files
 
-Settings are in `%APPDATA%\osutab\config.toml`. It's plain text, so you can edit it by hand while osutab is closed. A latency log for each run sits next to it, and only the newest 30 are kept. The Latency tab opens that folder.
+Settings are in `%APPDATA%\osutab\config.toml`. It's plain text, so you can edit it by hand while osutab is closed. Keep a copy first: if the file has a mistake, osutab starts with default settings and replaces the file. A latency log for each run sits next to it, and only the newest 30 are kept. The Latency tab opens that folder.
 
 ## Building from source
 
@@ -115,6 +137,8 @@ rustup target add aarch64-unknown-linux-musl
 .\build.ps1
 .\target\release\osutab.exe
 ```
+
+OpenTabletDriver mode also needs the .NET 10 SDK and OpenTabletDriver's source at commit `f3927ac` in `tools\otd-src`.
 
 `package.ps1` builds everything and puts a copy you can move anywhere in `dist\osutab`. That folder includes Google's adb, whose terms don't allow redistributing it, so keep it for your own use rather than publishing it.
 
@@ -146,6 +170,8 @@ Started from a terminal, osutab prints its messages there.
 | `--sendinput-bench SECONDS` | Times `SendInput` alone with zero-distance moves. Can run alongside a game. No tablet needed. |
 | `--burst ON_MS OFF_MS` | Sends fake pen reports in bursts, to test pauses without the pen. Use with `--dry-run`. |
 | `--ping-bench` | Measures USB round trips about 480 times a second. No pen needed. |
+| `--usb-bench SECONDS` | Measures the same round trips directly over USB, without adb.exe. Stop the adb server first. |
+| `--otd-bench SECONDS` | Sends simulated reports through OpenTabletDriver and times the cursor. This moves your cursor. |
 | `--ping-ms MS` | Sets how often to ping the tablet. |
 | `--busy-poll` | The PC program spins instead of waiting for data. In benchmarks this didn't help. |
 | `--helper-busy` | The tablet helper spins instead of waiting, using one tablet CPU core constantly. |
