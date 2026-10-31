@@ -4,6 +4,8 @@
 # Needs: Rust, the .NET 10 SDK, and in tools\: jdk21, gradle and android-sdk for the tablet app.
 # OpenTabletDriver's source is fetched into tools\otd-src at a pinned commit.
 $ErrorActionPreference = 'Stop'
+# MSBuild's lingering helper processes hold this script's output open long after it finishes.
+$env:MSBUILDDISABLENODEREUSE = '1'
 $tools = Join-Path $PSScriptRoot 'tools'
 $otdCommit = 'f3927ac11146cb7dd5c3b43277d5d1e33e36f6d6'
 

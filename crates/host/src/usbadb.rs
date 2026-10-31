@@ -7,7 +7,7 @@ use std::io;
 use std::mem::{size_of, zeroed};
 use std::ptr::{null, null_mut};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rsa::pkcs8::DecodePrivateKey;
@@ -125,6 +125,7 @@ pub struct UsbPipes {
     winusb: WINUSB_INTERFACE_HANDLE,
     pipe_in: u8,
     pipe_out: u8,
+    send_lock: Mutex<()>,
 }
 
 // WinUSB allows concurrent use of different pipes from different threads.
@@ -153,7 +154,7 @@ impl UsbPipes {
                 CloseHandle(device);
                 return Err(e);
             }
-            let mut pipes = UsbPipes { device, winusb, pipe_in: 0, pipe_out: 0 };
+            let mut pipes = UsbPipes { device, winusb, pipe_in: 0, pipe_out: 0, send_lock: Mutex::new(()) };
             let mut info: WINUSB_PIPE_INFORMATION = zeroed();
             let mut index = 0;
             while WinUsb_QueryPipe(winusb, 0, index, &mut info) != 0 {
@@ -193,6 +194,9 @@ impl UsbPipes {
 
     fn send(&self, command: u32, arg0: u32, arg1: u32, payload: &[u8]) -> io::Result<()> {
         let header = Header { command, arg0, arg1, data_length: payload.len() as u32 };
+        // A header and its payload must stay together: another thread's message landing between
+        // them corrupts the stream, and the tablet then waits forever.
+        let _guard = self.send_lock.lock().unwrap();
         self.write(&header.encode())?;
         if !payload.is_empty() {
             self.write(payload)?;
@@ -349,7 +353,8 @@ pub fn bench(seconds: u64) -> io::Result<()> {
         }
     }
     stop.store(true, Ordering::Relaxed);
-    let _ = writer.join();
+    // Not joined: a write in flight can wait on a reply nobody is reading now. Exiting ends it.
+    drop(writer);
     let d = crate::stats::Dist::of(&mut times);
     println!(
         "round trip ms: p50 {:.3} p90 {:.3} p99 {:.3} p99.9 {:.3} max {:.3} (n={})",
