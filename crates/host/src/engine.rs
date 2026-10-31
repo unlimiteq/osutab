@@ -198,9 +198,13 @@ fn pump(stream: &mut TcpStream, hello: &Hello, injector: &mut Injector, shared: 
                 let latest = shared.live_generation();
                 if latest != generation {
                     generation = latest;
+                    let previous_output = live.output;
                     live = shared.live_config();
-                    // Don't leave a button held by the mode we've just left.
-                    injector.reset();
+                    // Only a change of output needs this. Doing it on every area edit released
+                    // a held click, and the next report pressed it again.
+                    if live.output != previous_output {
+                        injector.reset();
+                    }
                 }
                 let transport_ms = sync.offset_ns().map(|offset| {
                     let on_host = s.timestamp_ns as i64 - offset;

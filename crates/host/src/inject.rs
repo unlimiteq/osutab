@@ -99,6 +99,45 @@ pub fn release_all() {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+struct ButtonEdges {
+    /// Press or release the left mouse button.
+    left: Option<bool>,
+    /// Press or release this scan code.
+    key: Option<(u16, bool)>,
+}
+
+/// What to send when the pen's state changes. Settings decide what a press does, but a release
+/// always follows what's actually held. Otherwise, changing a setting during a press would mean
+/// the release never comes, and the click or key stays stuck down.
+fn button_edges(
+    flags: u8,
+    changed: u8,
+    tip_click: bool,
+    button_scan: Option<u16>,
+    left_held: bool,
+    held_scan: u16,
+) -> ButtonEdges {
+    let mut edges = ButtonEdges::default();
+    if changed & FLAG_TOUCH != 0 {
+        if flags & FLAG_TOUCH != 0 {
+            if tip_click {
+                edges.left = Some(true);
+            }
+        } else if left_held {
+            edges.left = Some(false);
+        }
+    }
+    if changed & FLAG_BUTTON != 0 {
+        if flags & FLAG_BUTTON != 0 {
+            edges.key = button_scan.map(|scan| (scan, true));
+        } else if held_scan != 0 {
+            edges.key = Some((held_scan, false));
+        }
+    }
+    edges
+}
+
 pub struct Injector {
     pub target: Rect,
     pub desktop: Rect,
@@ -133,22 +172,66 @@ impl Injector {
             inputs[count] = mouse_input(dx, dy, MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK);
             count += 1;
         }
-        if tip_click && changed & FLAG_TOUCH != 0 {
-            let down = flags & FLAG_TOUCH != 0;
+        let held_scan = KEY_HELD_SCAN.load(Ordering::SeqCst);
+        let edges = button_edges(flags, changed, tip_click, button_scan, LEFT_HELD.load(Ordering::SeqCst), held_scan);
+        if let Some(down) = edges.left {
             LEFT_HELD.store(down, Ordering::SeqCst);
             inputs[count] = mouse_input(0, 0, if down { MOUSEEVENTF_LEFTDOWN } else { MOUSEEVENTF_LEFTUP });
             count += 1;
         }
-        if let Some(scan) = button_scan {
-            if changed & FLAG_BUTTON != 0 {
-                let down = flags & FLAG_BUTTON != 0;
-                KEY_HELD_SCAN.store(if down { scan } else { 0 }, Ordering::SeqCst);
-                inputs[count] = key_input(scan, !down);
-                count += 1;
-            }
+        if let Some((scan, down)) = edges.key {
+            KEY_HELD_SCAN.store(if down { scan } else { 0 }, Ordering::SeqCst);
+            inputs[count] = key_input(scan, !down);
+            count += 1;
         }
         if count > 0 {
             send(&inputs[..count]);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const Z: u16 = 0x2c;
+    const X: u16 = 0x2d;
+
+    #[test]
+    fn normal_press_and_release() {
+        let press = button_edges(FLAG_TOUCH | FLAG_BUTTON, FLAG_TOUCH | FLAG_BUTTON, true, Some(Z), false, 0);
+        assert_eq!(press, ButtonEdges { left: Some(true), key: Some((Z, true)) });
+        let release = button_edges(0, FLAG_TOUCH | FLAG_BUTTON, true, Some(Z), true, Z);
+        assert_eq!(release, ButtonEdges { left: Some(false), key: Some((Z, false)) });
+    }
+
+    #[test]
+    fn nothing_changed_sends_nothing() {
+        assert_eq!(button_edges(FLAG_TOUCH, 0, true, Some(Z), true, 0), ButtonEdges::default());
+    }
+
+    #[test]
+    fn turning_tip_click_off_during_a_press_still_releases() {
+        assert_eq!(button_edges(0, FLAG_TOUCH, false, None, true, 0).left, Some(false));
+    }
+
+    #[test]
+    fn turning_tip_click_off_stops_new_presses() {
+        assert_eq!(button_edges(FLAG_TOUCH, FLAG_TOUCH, false, None, false, 0).left, None);
+    }
+
+    #[test]
+    fn no_release_is_sent_for_a_click_that_never_happened() {
+        assert_eq!(button_edges(0, FLAG_TOUCH, true, None, false, 0).left, None);
+    }
+
+    #[test]
+    fn changing_the_key_during_a_press_releases_the_one_held() {
+        assert_eq!(button_edges(0, FLAG_BUTTON, true, Some(X), false, Z).key, Some((Z, false)));
+    }
+
+    #[test]
+    fn clearing_the_key_during_a_press_still_releases() {
+        assert_eq!(button_edges(0, FLAG_BUTTON, true, None, false, Z).key, Some((Z, false)));
     }
 }
