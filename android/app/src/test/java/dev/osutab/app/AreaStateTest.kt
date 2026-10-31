@@ -20,6 +20,23 @@ class AreaStateTest {
     }
 
     @Test
+    fun parsesPrefsFromThePc() {
+        // The exact form the Rust test checks on the other side.
+        assertEquals(AppPrefs(false, 1500, 30000, true), AppPrefs.parse("prefs 0 1500 30000 1"))
+        assertNull(AppPrefs.parse("prefs 0 1500"))
+        assertNull(AppPrefs.parse("prefs 0 soon 30000 1"))
+        assertNull(AppPrefs.parse("theme 0 1500 30000 1"))
+    }
+
+    @Test
+    fun rejectsThemesThatArentThemes() {
+        assertNull(AppTheme.parse("prefs 0 1500 30000 1"))
+        assertNull(AppTheme.parse("theme f4f4f6"))
+        assertNull(AppTheme.parse("theme nothex ffffff 1c1e23 62666f d62f7c 0102ff 2 35 0"))
+        assertNull(AppTheme.parse("theme f4f4f6 ffffff 1c1e23 62666f d62f7c 0102ff thick 35 0"))
+    }
+
+    @Test
     fun rejectsOtherLines() {
         assertNull(AreaState.parse("outline 1"))
         assertNull(AreaState.parse("state 1 2"))

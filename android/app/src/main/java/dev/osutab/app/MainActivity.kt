@@ -1,7 +1,9 @@
 package dev.osutab.app
 
 import android.app.Activity
+import android.content.Context
 import android.content.pm.ActivityInfo
+import android.content.res.Configuration
 import android.graphics.Rect
 import android.os.Bundle
 import android.os.Handler
@@ -40,6 +42,10 @@ class MainActivity : Activity() {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
         view = AreaView(this, onEdit = { edited -> outgoing.offer(edited.toLine()) }, onEditingChanged = ::setSmoothMotion)
+        // The waiting screen has no PC to ask, so it uses the theme from last time.
+        getPreferences(Context.MODE_PRIVATE).getString(SAVED_THEME, null)?.let { saved ->
+            AppTheme.parse(saved)?.let { view.theme = it }
+        }
         setContentView(view)
         // Stops edge swipes from a resting palm opening the system's gestures where Android allows.
         view.addOnLayoutChangeListener { v: View, l, t, r, b, _, _, _, _ ->
@@ -82,6 +88,30 @@ class MainActivity : Activity() {
             // this app. The transient behaviour hides that, leaving them up for several seconds.
             it.systemBarsBehavior = WindowInsetsController.BEHAVIOR_DEFAULT
             it.hide(WindowInsets.Type.systemBars())
+        }
+    }
+
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        reportRotation()
+    }
+
+    /** When the pen follows the screen, the PC needs to know each time the screen turns. */
+    private fun reportRotation() {
+        if (view.prefs.followScreen) outgoing.offer("rotation ${(display?.rotation ?: 0) * 90}")
+    }
+
+    private fun applyTheme(theme: AppTheme) {
+        if (view.theme == theme) return
+        view.theme = theme
+        getPreferences(Context.MODE_PRIVATE).edit().putString(SAVED_THEME, theme.toLine()).apply()
+    }
+
+    private fun applyPrefs(prefs: AppPrefs) {
+        view.prefs = prefs
+        if (prefs.followScreen) {
+            requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_FULL_USER
+            reportRotation()
         }
     }
 
@@ -130,8 +160,10 @@ class MainActivity : Activity() {
                 } else {
                     state
                 }
-                applyOrientation(state.orientation)
+                if (!view.prefs.followScreen) applyOrientation(state.orientation)
             }
+            line.startsWith("theme ") -> AppTheme.parse(line)?.let(::applyTheme)
+            line.startsWith("prefs ") -> AppPrefs.parse(line)?.let(::applyPrefs)
             line == "outline 1" -> view.showOutline = true
             line == "outline 0" -> view.showOutline = false
         }
@@ -192,11 +224,15 @@ class MainActivity : Activity() {
             return Thread({
                 try {
                     while (true) {
-                        var line = outgoing.take()
+                        val batch = mutableListOf(outgoing.take())
+                        outgoing.drainTo(batch)
                         // Only the newest size matters while a finger is moving.
-                        while (true) line = outgoing.poll() ?: break
-                        writer.write(line)
-                        writer.write("\n")
+                        val newestSet = batch.lastOrNull { it.startsWith("set ") }
+                        for (line in batch) {
+                            if (line.startsWith("set ") && line !== newestSet) continue
+                            writer.write(line)
+                            writer.write("\n")
+                        }
                         writer.flush()
                     }
                 } catch (_: Exception) {
@@ -211,5 +247,6 @@ class MainActivity : Activity() {
         const val CONNECT_TIMEOUT_MS = 1000
         const val DISCONNECT_GRACE_MS = 1500L
         const val REHIDE_MS = 150L
+        const val SAVED_THEME = "theme"
     }
 }

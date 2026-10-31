@@ -1,5 +1,6 @@
 package dev.osutab.app
 
+import android.animation.ValueAnimator
 import android.content.Context
 import android.graphics.Canvas
 import android.graphics.Color
@@ -16,7 +17,8 @@ import kotlin.math.sin
 
 /**
  * Draws the pen area and takes finger gestures. It consumes every touch, so a palm can't reach
- * anything else on the tablet. The pen never arrives here: the helper holds it for the PC.
+ * anything else on the tablet. The pen never arrives here: the helper holds it for the PC, which
+ * is why nothing drawn or animated here can affect pen latency.
  */
 class AreaView(
     context: Context,
@@ -25,10 +27,12 @@ class AreaView(
 ) : View(context) {
     var state = AreaState()
         set(value) {
-            if (field != value) {
-                field = value
-                invalidate()
-            }
+            if (field == value) return
+            val previous = field
+            field = value
+            // A new preset glides into place. Anything else, a finger above all, is followed exactly.
+            if (previous.preset != value.preset && !holdsArea) glideFrom(previous) else glideProgress = null
+            invalidate()
         }
 
     /** Editing needs the PC, so losing the connection ends it and shows one steady message. */
@@ -37,12 +41,28 @@ class AreaView(
             if (field == value) return
             field = value
             if (!value) {
-                removeCallbacks(enterEditing)
+                cancelHold()
                 setEditing(false)
             }
+            fadeContentIn()
             invalidate()
         }
     var showOutline = true
+        set(value) {
+            if (field != value) {
+                field = value
+                invalidate()
+            }
+        }
+    var theme = AppTheme()
+        set(value) {
+            if (field != value) {
+                field = value
+                applyTheme()
+                invalidate()
+            }
+        }
+    var prefs = AppPrefs()
         set(value) {
             if (field != value) {
                 field = value
@@ -56,23 +76,23 @@ class AreaView(
 
     private var editing = false
 
-    private val outsidePaint = Color.rgb(8, 9, 11)
-    private val fillPaint = Paint().apply { color = Color.rgb(28, 33, 41) }
-    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.rgb(90, 170, 255)
+    private val density = resources.displayMetrics.density
+    private val fillPaint = Paint()
+    private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 34f }
+    private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 26f }
+    private val buttonPaint = Paint(Paint.ANTI_ALIAS_FLAG)
+    private val buttonTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 26f }
+    private val buttonEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 4f
+        strokeWidth = 2f
     }
-    private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.rgb(90, 170, 255) }
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(220, 255, 255, 255)
-        textSize = 34f
+    private val holdPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 6f
+        strokeCap = Paint.Cap.ROUND
     }
-    private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = Color.argb(170, 255, 255, 255)
-        textSize = 26f
-    }
-    private val buttonPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(90, 255, 255, 255) }
     private val areaPath = Path()
 
     private val pxPerMm: Double get() = width / state.tabletWidth
@@ -90,38 +110,158 @@ class AreaView(
     private val enterEditing = Runnable { setEditing(true) }
     private val leaveEditing = Runnable { setEditing(false) }
 
+    // Everything animated. Each runs once and stops: nothing here loops or draws while idle.
+    private var glideFrom: List<Pair<Double, Double>>? = null
+    private var glideProgress: Float? = null
+    private var glide: ValueAnimator? = null
+    private var handleAlpha = 0f
+    private var contentAlpha = 1f
+    private var holdProgress = 0f
+    private var holdAnimator: ValueAnimator? = null
+    private var handleAnimator: ValueAnimator? = null
+    private var contentAnimator: ValueAnimator? = null
+
+    init {
+        applyTheme()
+    }
+
+    private fun applyTheme() {
+        fillPaint.color = theme.background
+        outlinePaint.color = theme.outline
+        // Scaled for the screen's density, so a theme looks the same on the PC's preview.
+        outlinePaint.strokeWidth = theme.outlineThickness * density
+        handlePaint.color = theme.accent
+        textPaint.color = theme.text
+        smallPaint.color = theme.muted
+        buttonPaint.color = theme.panel
+        buttonTextPaint.color = theme.text
+        buttonEdgePaint.color = theme.line
+        holdPaint.color = theme.accent
+        if (!theme.animations) {
+            glide?.cancel()
+            contentAnimator?.cancel()
+            handleAnimator?.cancel()
+            holdAnimator?.cancel()
+            glideProgress = null
+            contentAlpha = 1f
+            handleAlpha = if (editing) 1f else 0f
+        }
+    }
+
+    private fun animate(durationMs: Long, start: Float, end: Float, update: (Float) -> Unit): ValueAnimator =
+        ValueAnimator.ofFloat(start, end).apply {
+            duration = durationMs
+            addUpdateListener {
+                update(it.animatedValue as Float)
+                invalidate()
+            }
+            start()
+        }
+
+    private fun glideFrom(previous: AreaState) {
+        glide?.cancel()
+        if (!theme.animations || !connected) {
+            glideProgress = null
+            return
+        }
+        glideFrom = previous.corners()
+        glideProgress = 0f
+        glide = animate(GLIDE_MS, 0f, 1f) { value -> glideProgress = if (value < 1f) value else null }
+    }
+
+    private fun fadeContentIn() {
+        contentAnimator?.cancel()
+        if (!theme.animations) {
+            contentAlpha = 1f
+            return
+        }
+        contentAlpha = 0f
+        contentAnimator = animate(FADE_MS, 0f, 1f) { contentAlpha = it }
+    }
+
+    private fun startHold() {
+        postDelayed(enterEditing, prefs.holdToEditMs)
+        holdAnimator?.cancel()
+        if (theme.animations) holdAnimator = animate(prefs.holdToEditMs, 0f, 1f) { holdProgress = it }
+    }
+
+    private fun cancelHold() {
+        removeCallbacks(enterEditing)
+        holdAnimator?.cancel()
+        holdProgress = 0f
+        invalidate()
+    }
+
     private fun inEditButton(x: Float, y: Float) = x < BUTTON_SIZE_PX && y > height - BUTTON_SIZE_PX
 
+    /** Where to draw the corners, in pixels, partway along a glide if there is one. */
+    private fun drawnCorners(scale: Float): List<Pair<Float, Float>> {
+        val target = state.corners()
+        val from = glideFrom
+        val progress = glideProgress
+        return target.mapIndexed { i, corner ->
+            if (from != null && progress != null) {
+                val eased = 1 - (1 - progress) * (1 - progress)
+                ((from[i].first + (corner.first - from[i].first) * eased) * scale).toFloat() to
+                    ((from[i].second + (corner.second - from[i].second) * eased) * scale).toFloat()
+            } else {
+                (corner.first * scale).toFloat() to (corner.second * scale).toFloat()
+            }
+        }
+    }
+
     override fun onDraw(canvas: Canvas) {
-        canvas.drawColor(outsidePaint)
+        val alpha = (contentAlpha * 255).toInt()
+        // There's no area to set off here, and the theme's text is only sure to read on its background.
+        canvas.drawColor(if (connected) theme.outside else theme.background)
         if (!connected) {
+            textPaint.alpha = alpha
+            smallPaint.alpha = alpha
             drawCentred(canvas, "Waiting for the PC", height / 2f - 10f, textPaint)
             drawCentred(canvas, "Start osutab on your computer. You can edit the area once it connects.", height / 2f + 30f, smallPaint)
+            textPaint.alpha = 255
+            smallPaint.alpha = 255
             return
         }
         val scale = pxPerMm.toFloat()
         if (showOutline || editing) {
-            val corners = state.corners().map { (it.first * scale).toFloat() to (it.second * scale).toFloat() }
+            val corners = drawnCorners(scale)
             areaPath.rewind()
             areaPath.moveTo(corners[0].first, corners[0].second)
             for (i in 1 until corners.size) areaPath.lineTo(corners[i].first, corners[i].second)
             areaPath.close()
             canvas.drawPath(areaPath, fillPaint)
             canvas.drawPath(areaPath, outlinePaint)
-            if (editing) {
+            if (handleAlpha > 0f) {
+                handlePaint.alpha = (handleAlpha * 255).toInt()
                 for (corner in corners) canvas.drawCircle(corner.first, corner.second, HANDLE_RADIUS_PX, handlePaint)
             }
-            val cx = (state.centerX * scale).toFloat()
-            val cy = (state.centerY * scale).toFloat()
-            val label = "%.1f × %.1f mm".format(state.width, state.height)
-            val detail = state.sensitivityLabel()
-            canvas.drawText(label, cx - textPaint.measureText(label) / 2, cy - 8f, textPaint)
-            canvas.drawText(detail, cx - smallPaint.measureText(detail) / 2, cy + 28f, smallPaint)
-            canvas.drawText(state.preset, cx - smallPaint.measureText(state.preset) / 2, cy + 62f, smallPaint)
+            if (prefs.showAreaLabel || editing) {
+                val cx = (corners[0].first + corners[2].first) / 2
+                val cy = (corners[0].second + corners[2].second) / 2
+                val label = "%.1f × %.1f mm".format(state.width, state.height)
+                val detail = state.sensitivityLabel()
+                canvas.drawText(label, cx - textPaint.measureText(label) / 2, cy - 8f, textPaint)
+                canvas.drawText(detail, cx - smallPaint.measureText(detail) / 2, cy + 28f, smallPaint)
+                canvas.drawText(state.preset, cx - smallPaint.measureText(state.preset) / 2, cy + 62f, smallPaint)
+            }
         }
-        canvas.drawCircle(70f, height - 70f, 60f, buttonPaint)
+        canvas.drawCircle(BUTTON_CENTRE_PX, height - BUTTON_CENTRE_PX, BUTTON_RADIUS_PX, buttonPaint)
+        canvas.drawCircle(BUTTON_CENTRE_PX, height - BUTTON_CENTRE_PX, BUTTON_RADIUS_PX, buttonEdgePaint)
+        if (holdProgress > 0f && !editing) {
+            canvas.drawArc(
+                BUTTON_CENTRE_PX - BUTTON_RADIUS_PX,
+                height - BUTTON_CENTRE_PX - BUTTON_RADIUS_PX,
+                BUTTON_CENTRE_PX + BUTTON_RADIUS_PX,
+                height - BUTTON_CENTRE_PX + BUTTON_RADIUS_PX,
+                -90f,
+                holdProgress * 360f,
+                false,
+                holdPaint,
+            )
+        }
         val button = if (editing) "Done" else "Hold"
-        canvas.drawText(button, 70f - smallPaint.measureText(button) / 2, height - 61f, smallPaint)
+        canvas.drawText(button, BUTTON_CENTRE_PX - buttonTextPaint.measureText(button) / 2, height - BUTTON_CENTRE_PX + 9f, buttonTextPaint)
         if (editing) drawCentred(canvas, "Drag to move. Drag a corner dot or pinch to resize.", 44f, smallPaint)
     }
 
@@ -135,7 +275,7 @@ class AreaView(
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 if (inEditButton(event.x, event.y)) {
-                    if (editing) setEditing(false) else postDelayed(enterEditing, HOLD_TO_EDIT_MS)
+                    if (editing) setEditing(false) else startHold()
                 } else if (editing) {
                     // Delivers each touch as it happens, instead of once a frame.
                     requestUnbufferedDispatch(InputDevice.SOURCE_TOUCHSCREEN)
@@ -144,18 +284,18 @@ class AreaView(
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
                 // A second contact means a palm or a pinch, never a deliberate hold of the button.
-                removeCallbacks(enterEditing)
+                cancelHold()
                 if (editing && event.pointerCount == 2) {
                     gesture = Gesture.PINCH
                     pinchDistance = distance(event)
                 }
             }
             MotionEvent.ACTION_MOVE -> {
-                if (!inEditButton(event.x, event.y)) removeCallbacks(enterEditing)
+                if (!inEditButton(event.x, event.y)) cancelHold()
                 if (editing) drag(event)
             }
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                removeCallbacks(enterEditing)
+                cancelHold()
                 gesture = Gesture.NONE
                 noteActivity()
             }
@@ -170,9 +310,18 @@ class AreaView(
         val changed = editing != on
         editing = on
         gesture = Gesture.NONE
+        holdAnimator?.cancel()
+        holdProgress = 0f
         noteActivity()
         if (changed) {
             onEditingChanged(on)
+            handleAnimator?.cancel()
+            val target = if (on) 1f else 0f
+            if (theme.animations) {
+                handleAnimator = animate(FADE_MS, handleAlpha, target) { handleAlpha = it }
+            } else {
+                handleAlpha = target
+            }
             invalidate()
         }
     }
@@ -180,7 +329,7 @@ class AreaView(
     /** Edit mode ends by itself, so a forgotten edit can't let a palm move the area in play. */
     private fun noteActivity() {
         removeCallbacks(leaveEditing)
-        if (editing) postDelayed(leaveEditing, EDIT_TIMEOUT_MS)
+        if (editing) postDelayed(leaveEditing, prefs.editTimeoutMs)
     }
 
     private fun distance(e: MotionEvent) = hypot(e.getX(0) - e.getX(1), e.getY(0) - e.getY(1))
@@ -240,8 +389,10 @@ class AreaView(
     private companion object {
         const val HANDLE_RADIUS_PX = 18f
         const val BUTTON_SIZE_PX = 150f
-        const val HOLD_TO_EDIT_MS = 1000L
-        const val EDIT_TIMEOUT_MS = 20_000L
+        const val BUTTON_CENTRE_PX = 70f
+        const val BUTTON_RADIUS_PX = 60f
         const val ECHO_GUARD_MS = 500L
+        const val GLIDE_MS = 150L
+        const val FADE_MS = 200L
     }
 }
