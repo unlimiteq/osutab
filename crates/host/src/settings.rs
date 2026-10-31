@@ -5,11 +5,16 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use crate::mapping::{AreaMm, Rotation, TABLET_LONG_MM, TABLET_SHORT_MM};
+use crate::theme::{self, Rgb, Theme, ThemeOverrides, DEFAULT_THEME, MAX_THICKNESS, MIN_THICKNESS};
 
 pub const MIN_AREA_MM: f64 = 10.0;
 const DEFAULT_PRESET: &str = "Default";
 const FIRST_RUN_WIDTH_MM: f64 = 120.0;
 const FIRST_RUN_HEIGHT_MM: f64 = 75.0;
+pub const HOLD_SECONDS: std::ops::RangeInclusive<f64> = 0.3..=5.0;
+pub const EDIT_TIMEOUT_SECONDS: std::ops::RangeInclusive<f64> = 5.0..=120.0;
+pub const DEFAULT_HOLD_SECONDS: f64 = 1.0;
+pub const DEFAULT_EDIT_TIMEOUT_SECONDS: f64 = 20.0;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Preset {
@@ -43,6 +48,32 @@ impl Output {
     }
 }
 
+/// How the pen's reports reach the PC.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum UsbPath {
+    /// Through adb.exe, which everything else on the PC can share.
+    Adb,
+    /// Straight to the USB interface, which stops adb.exe while osutab runs.
+    Direct,
+}
+
+impl UsbPath {
+    fn name(self) -> &'static str {
+        match self {
+            UsbPath::Adb => "adb",
+            UsbPath::Direct => "direct",
+        }
+    }
+
+    pub fn parse(name: &str) -> Option<UsbPath> {
+        match name {
+            "adb" => Some(UsbPath::Adb),
+            "direct" => Some(UsbPath::Direct),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Settings {
     pub output: Output,
@@ -58,6 +89,21 @@ pub struct Settings {
     pub button_key: String,
     /// Draws the pen area on the tablet's screen.
     pub show_outline: bool,
+    /// The name of a built-in or saved theme.
+    pub theme: String,
+    pub theme_overrides: ThemeOverrides,
+    pub saved_themes: Vec<Theme>,
+    pub animations: bool,
+    /// Shows the size and sensitivity inside the area on the tablet.
+    pub show_area_label: bool,
+    pub hold_to_edit_seconds: f64,
+    pub edit_timeout_seconds: f64,
+    pub close_to_tray: bool,
+    pub start_minimized: bool,
+    /// Brings the tablet app to the front when the tablet connects.
+    pub open_tablet_app: bool,
+    pub screen_pinning: bool,
+    pub usb_path: UsbPath,
 }
 
 fn full_area() -> AreaMm {
@@ -75,6 +121,18 @@ impl Default for Settings {
             tip_click: true,
             button_key: String::new(),
             show_outline: true,
+            theme: DEFAULT_THEME.to_string(),
+            theme_overrides: ThemeOverrides::default(),
+            saved_themes: Vec::new(),
+            animations: true,
+            show_area_label: true,
+            hold_to_edit_seconds: DEFAULT_HOLD_SECONDS,
+            edit_timeout_seconds: DEFAULT_EDIT_TIMEOUT_SECONDS,
+            close_to_tray: true,
+            start_minimized: false,
+            open_tablet_app: true,
+            screen_pinning: false,
+            usb_path: UsbPath::Adb,
         }
     }
 }
@@ -123,17 +181,63 @@ impl Settings {
         self.active = self.active.min(self.presets.len() - 1);
         true
     }
+
+    /// The theme chosen, without any changes made on top of it.
+    pub fn base_theme(&self) -> Theme {
+        self.saved_themes
+            .iter()
+            .find(|t| t.name == self.theme)
+            .cloned()
+            .or_else(|| theme::built_in().into_iter().find(|t| t.name == self.theme))
+            .unwrap_or_else(|| theme::built_in().remove(0))
+    }
+
+    /// The colors to draw with.
+    pub fn active_theme(&self) -> Theme {
+        self.theme_overrides.apply(&self.base_theme())
+    }
+
+    pub fn choose_theme(&mut self, name: &str) {
+        self.theme = name.to_string();
+        self.theme_overrides = ThemeOverrides::default();
+    }
+
+    /// Saves the colors in use under `name`, replacing a saved theme of that name, and selects it.
+    pub fn save_theme(&mut self, name: &str) -> Result<(), String> {
+        let name = theme::clean_theme_name(name)?;
+        let saved = Theme { name: name.clone(), ..self.active_theme() };
+        match self.saved_themes.iter_mut().find(|t| t.name == name) {
+            Some(existing) => *existing = saved,
+            None => self.saved_themes.push(saved),
+        }
+        self.choose_theme(&name);
+        Ok(())
+    }
+
+    /// Removes the selected theme if it's a saved one, and goes back to the default.
+    pub fn delete_saved_theme(&mut self) -> bool {
+        let Some(index) = self.saved_themes.iter().position(|t| t.name == self.theme) else {
+            return false;
+        };
+        self.saved_themes.remove(index);
+        self.choose_theme(DEFAULT_THEME);
+        true
+    }
+}
+
+pub(crate) fn clean_name(name: &str, what: &str) -> Result<String, String> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err(format!("a {what} needs a name"));
+    }
+    if name.contains(['[', ']', '\n', '\r']) {
+        return Err(format!("a {what} name can't contain [ or ]"));
+    }
+    Ok(name.to_string())
 }
 
 fn clean_preset_name(name: &str) -> Result<String, String> {
-    let name = name.trim();
-    if name.is_empty() {
-        return Err("a preset needs a name".to_string());
-    }
-    if name.contains(['[', ']', '\n', '\r']) {
-        return Err("a preset name can't contain [ or ]".to_string());
-    }
-    Ok(name.to_string())
+    clean_name(name, "preset")
 }
 
 pub fn default_path() -> PathBuf {
@@ -162,7 +266,16 @@ fn parse_orientation(name: &str) -> Option<Option<Rotation>> {
     }
 }
 
+fn optional_color(color: Option<Rgb>) -> String {
+    color.map_or(String::new(), Rgb::to_hex)
+}
+
+fn optional_number<T: ToString>(value: Option<T>) -> String {
+    value.map_or(String::new(), |v| v.to_string())
+}
+
 pub fn to_text(s: &Settings) -> String {
+    let o = &s.theme_overrides;
     let mut text = format!(
         "# osutab settings. Delete this file to be asked again on the next start.\n\
          # output: direct, opentabletdriver\n\
@@ -176,6 +289,35 @@ pub fn to_text(s: &Settings) -> String {
          # A single letter or digit for the pen's side button. Leave empty for none.\n\
          button_key = {}\n\
          \n\
+         # Appearance. A built-in theme, or one saved below. Colors are #rrggbb.\n\
+         theme = {}\n\
+         animations = {}\n\
+         # Changes on top of the theme. Leave one empty to use the theme's value.\n\
+         color_background = {}\n\
+         color_panel = {}\n\
+         color_text = {}\n\
+         color_muted = {}\n\
+         color_accent = {}\n\
+         outline_color = {}\n\
+         # From {MIN_THICKNESS} to {MAX_THICKNESS}.\n\
+         outline_thickness = {}\n\
+         # How dark the tablet is outside the pen area, from 0 to 100.\n\
+         outside_dim = {}\n\
+         \n\
+         # The tablet app.\n\
+         show_area_label = {}\n\
+         hold_to_edit_seconds = {}\n\
+         edit_timeout_seconds = {}\n\
+         open_tablet_app = {}\n\
+         # Blocks Home and Back on the tablet. Leaving it sends the tablet to its lock screen.\n\
+         screen_pinning = {}\n\
+         \n\
+         # This program.\n\
+         close_to_tray = {}\n\
+         start_minimized = {}\n\
+         # usb_path: adb, direct. Direct stops adb.exe while osutab runs.\n\
+         usb_path = {}\n\
+         \n\
          # Pen areas in millimetres, as you see the tablet. Offsets move an area from the\n\
          # centre of the tablet, and rotation turns it clockwise.\n",
         s.output.name(),
@@ -185,6 +327,24 @@ pub fn to_text(s: &Settings) -> String {
         s.tip_click,
         s.show_outline,
         s.button_key,
+        s.theme,
+        s.animations,
+        optional_color(o.background),
+        optional_color(o.panel),
+        optional_color(o.text),
+        optional_color(o.muted),
+        optional_color(o.accent),
+        optional_color(o.outline),
+        optional_number(o.outline_thickness),
+        optional_number(o.outside_dim),
+        s.show_area_label,
+        s.hold_to_edit_seconds,
+        s.edit_timeout_seconds,
+        s.open_tablet_app,
+        s.screen_pinning,
+        s.close_to_tray,
+        s.start_minimized,
+        s.usb_path.name(),
     );
     for preset in &s.presets {
         let a = &preset.area;
@@ -193,84 +353,253 @@ pub fn to_text(s: &Settings) -> String {
             preset.name, a.width, a.height, a.offset_x, a.offset_y, a.rotation_deg,
         ));
     }
+    for t in &s.saved_themes {
+        text.push_str(&format!(
+            "\n[theme {}]\nbackground = {}\npanel = {}\ntext = {}\nmuted = {}\naccent = {}\noutline = {}\noutline_thickness = {}\noutside_dim = {}\n",
+            t.name,
+            t.background.to_hex(),
+            t.panel.to_hex(),
+            t.text.to_hex(),
+            t.muted.to_hex(),
+            t.accent.to_hex(),
+            t.outline.to_hex(),
+            t.outline_thickness,
+            t.outside_dim,
+        ));
+    }
     text
 }
 
-pub fn from_text(text: &str) -> Result<Settings, String> {
+/// What a settings file held, and everything in it that couldn't be used.
+#[derive(Debug)]
+pub struct Parsed {
+    pub settings: Settings,
+    pub problems: Vec<String>,
+}
+
+fn number(value: &str) -> Result<f64, String> {
+    value.parse::<f64>().ok().filter(|v| v.is_finite()).ok_or(format!("{value} isn't a number"))
+}
+
+fn boolean(value: &str) -> Result<bool, String> {
+    value.parse::<bool>().map_err(|_| format!("expected true or false, not {value}"))
+}
+
+fn color(value: &str) -> Result<Rgb, String> {
+    Rgb::parse(value).ok_or(format!("{value} isn't a #rrggbb color"))
+}
+
+fn optional_color_value(value: &str) -> Result<Option<Rgb>, String> {
+    if value.is_empty() { Ok(None) } else { color(value).map(Some) }
+}
+
+fn thickness(value: &str) -> Result<f32, String> {
+    let v = number(value)? as f32;
+    (MIN_THICKNESS..=MAX_THICKNESS).contains(&v).then_some(v).ok_or(format!("must be from {MIN_THICKNESS} to {MAX_THICKNESS}"))
+}
+
+fn dim(value: &str) -> Result<u8, String> {
+    value.parse::<u8>().ok().filter(|v| *v <= 100).ok_or("must be from 0 to 100".to_string())
+}
+
+fn in_range(value: &str, range: &std::ops::RangeInclusive<f64>) -> Result<f64, String> {
+    let v = number(value)?;
+    range.contains(&v).then_some(v).ok_or(format!("must be from {} to {}", range.start(), range.end()))
+}
+
+fn preset_field(preset: &mut Preset, key: &str, value: &str) -> Option<Result<(), String>> {
+    let target = match key {
+        "width_mm" => &mut preset.area.width,
+        "height_mm" => &mut preset.area.height,
+        "offset_x_mm" => &mut preset.area.offset_x,
+        "offset_y_mm" => &mut preset.area.offset_y,
+        "rotation_deg" => &mut preset.area.rotation_deg,
+        _ => return None,
+    };
+    Some(number(value).map(|v| *target = v))
+}
+
+fn theme_field(t: &mut Theme, key: &str, value: &str) -> Option<Result<(), String>> {
+    let target = match key {
+        "background" => &mut t.background,
+        "panel" => &mut t.panel,
+        "text" => &mut t.text,
+        "muted" => &mut t.muted,
+        "accent" => &mut t.accent,
+        "outline" => &mut t.outline,
+        "outline_thickness" => return Some(thickness(value).map(|v| t.outline_thickness = v)),
+        "outside_dim" => return Some(dim(value).map(|v| t.outside_dim = v)),
+        _ => return None,
+    };
+    Some(color(value).map(|c| *target = c))
+}
+
+/// Files from before presets existed keep their one area at the top level.
+struct Legacy {
+    area: AreaMm,
+    found: bool,
+}
+
+fn top_level_field(s: &mut Settings, active: &mut Option<String>, legacy: &mut Legacy, key: &str, value: &str) -> Result<(), String> {
+    let o = &mut s.theme_overrides;
+    match key {
+        "output" => s.output = Output::parse(value).ok_or(format!("unknown output {value}"))?,
+        "orientation" => s.rotation = parse_orientation(value).ok_or(format!("unknown orientation {value}"))?,
+        "active_preset" => *active = Some(value.to_string()),
+        "aspect_lock" => s.aspect_lock = boolean(value)?,
+        "tip_click" => s.tip_click = boolean(value)?,
+        "show_outline" => s.show_outline = boolean(value)?,
+        "button_key" => s.button_key = value.to_string(),
+        "theme" => s.theme = value.to_string(),
+        "animations" => s.animations = boolean(value)?,
+        "color_background" => o.background = optional_color_value(value)?,
+        "color_panel" => o.panel = optional_color_value(value)?,
+        "color_text" => o.text = optional_color_value(value)?,
+        "color_muted" => o.muted = optional_color_value(value)?,
+        "color_accent" => o.accent = optional_color_value(value)?,
+        "outline_color" => o.outline = optional_color_value(value)?,
+        "outline_thickness" => o.outline_thickness = if value.is_empty() { None } else { Some(thickness(value)?) },
+        "outside_dim" => o.outside_dim = if value.is_empty() { None } else { Some(dim(value)?) },
+        "show_area_label" => s.show_area_label = boolean(value)?,
+        "hold_to_edit_seconds" => s.hold_to_edit_seconds = in_range(value, &HOLD_SECONDS)?,
+        "edit_timeout_seconds" => s.edit_timeout_seconds = in_range(value, &EDIT_TIMEOUT_SECONDS)?,
+        "close_to_tray" => s.close_to_tray = boolean(value)?,
+        "start_minimized" => s.start_minimized = boolean(value)?,
+        "open_tablet_app" => s.open_tablet_app = boolean(value)?,
+        "screen_pinning" => s.screen_pinning = boolean(value)?,
+        "usb_path" => s.usb_path = UsbPath::parse(value).ok_or(format!("unknown path {value}"))?,
+        "area_width_mm" => (legacy.area.width, legacy.found) = (number(value)?, true),
+        "area_height_mm" => (legacy.area.height, legacy.found) = (number(value)?, true),
+        "area_offset_x_mm" => (legacy.area.offset_x, legacy.found) = (number(value)?, true),
+        "area_offset_y_mm" => (legacy.area.offset_y, legacy.found) = (number(value)?, true),
+        _ => return Err("unknown setting".to_string()),
+    }
+    Ok(())
+}
+
+enum Section {
+    Top,
+    Preset,
+    Theme,
+    /// A section with an unusable name, whose values have nowhere to go.
+    Skipped,
+}
+
+/// Reads a settings file. Anything missing gets its default, so older files keep working, and one
+/// bad line only costs that line. The caller keeps a copy of a file with problems before it's saved.
+pub fn parse(text: &str) -> Parsed {
     let mut s = Settings { presets: Vec::new(), ..Settings::default() };
+    let mut problems = Vec::new();
     let mut active_name: Option<String> = None;
-    // Files from before presets existed keep their one area at the top level.
-    let mut legacy = full_area();
-    let mut has_legacy = false;
+    let mut legacy = Legacy { area: full_area(), found: false };
+    let mut section = Section::Top;
 
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim();
+        let number = index + 1;
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
         if let Some(rest) = line.strip_prefix("[preset ") {
-            let name = rest.strip_suffix(']').ok_or(format!("line {}: expected [preset NAME]", index + 1))?;
-            s.presets.push(Preset { name: clean_preset_name(name)?, area: full_area() });
-            continue;
-        }
-        let (key, value) = line.split_once('=').ok_or(format!("line {}: expected key = value", index + 1))?;
-        let (key, value) = (key.trim(), value.trim());
-        let number = || value.parse::<f64>().ok().filter(|v| v.is_finite()).ok_or(format!("{key}: invalid number {value}"));
-        let boolean = || value.parse::<bool>().map_err(|_| format!("{key}: expected true or false, not {value}"));
-        if let Some(preset) = s.presets.last_mut() {
-            match key {
-                "width_mm" => preset.area.width = number()?,
-                "height_mm" => preset.area.height = number()?,
-                "offset_x_mm" => preset.area.offset_x = number()?,
-                "offset_y_mm" => preset.area.offset_y = number()?,
-                "rotation_deg" => preset.area.rotation_deg = number()?,
-                other => return Err(format!("unknown preset setting {other}")),
+            match rest.strip_suffix(']').ok_or("expected [preset NAME]".to_string()).and_then(clean_preset_name) {
+                Ok(name) if s.presets.iter().any(|p| p.name == name) => {
+                    problems.push(format!("line {number}: there's already a preset named {name}"));
+                    section = Section::Skipped;
+                }
+                Ok(name) => {
+                    s.presets.push(Preset { name, area: full_area() });
+                    section = Section::Preset;
+                }
+                Err(e) => {
+                    problems.push(format!("line {number}: {e}"));
+                    section = Section::Skipped;
+                }
             }
             continue;
         }
-        match key {
-            "output" => s.output = Output::parse(value).ok_or(format!("unknown output {value}"))?,
-            "orientation" => s.rotation = parse_orientation(value).ok_or(format!("unknown orientation {value}"))?,
-            "active_preset" => active_name = Some(value.to_string()),
-            "aspect_lock" => s.aspect_lock = boolean()?,
-            "tip_click" => s.tip_click = boolean()?,
-            "show_outline" => s.show_outline = boolean()?,
-            "button_key" => s.button_key = value.to_string(),
-            "area_width_mm" => (legacy.width, has_legacy) = (number()?, true),
-            "area_height_mm" => (legacy.height, has_legacy) = (number()?, true),
-            "area_offset_x_mm" => (legacy.offset_x, has_legacy) = (number()?, true),
-            "area_offset_y_mm" => (legacy.offset_y, has_legacy) = (number()?, true),
-            other => return Err(format!("unknown setting {other}")),
+        if let Some(rest) = line.strip_prefix("[theme ") {
+            match rest.strip_suffix(']').ok_or("expected [theme NAME]".to_string()).and_then(theme::clean_theme_name) {
+                Ok(name) if s.saved_themes.iter().any(|t| t.name == name) => {
+                    problems.push(format!("line {number}: there's already a theme named {name}"));
+                    section = Section::Skipped;
+                }
+                Ok(name) => {
+                    s.saved_themes.push(Theme { name, ..theme::built_in().remove(0) });
+                    section = Section::Theme;
+                }
+                Err(e) => {
+                    problems.push(format!("line {number}: {e}"));
+                    section = Section::Skipped;
+                }
+            }
+            continue;
+        }
+        let Some((key, value)) = line.split_once('=') else {
+            problems.push(format!("line {number}: expected key = value"));
+            continue;
+        };
+        let (key, value) = (key.trim(), value.trim());
+        // A section's own keys go to it. Anything else is a top-level setting that came after a
+        // section, which is easy to do when editing by hand.
+        let handled = match section {
+            Section::Preset => s.presets.last_mut().and_then(|p| preset_field(p, key, value)),
+            Section::Theme => s.saved_themes.last_mut().and_then(|t| theme_field(t, key, value)),
+            Section::Skipped => Some(Ok(())),
+            Section::Top => None,
+        };
+        let outcome = handled.unwrap_or_else(|| top_level_field(&mut s, &mut active_name, &mut legacy, key, value));
+        if let Err(e) = outcome {
+            problems.push(format!("line {number}: {key}: {e}"));
         }
     }
 
-    if s.presets.is_empty() || has_legacy {
-        s.presets.insert(0, Preset { name: DEFAULT_PRESET.to_string(), area: legacy });
+    if s.presets.is_empty() || legacy.found {
+        s.presets.insert(0, Preset { name: DEFAULT_PRESET.to_string(), area: legacy.area });
     }
-    for preset in &s.presets {
+    for preset in &mut s.presets {
         if preset.area.width < MIN_AREA_MM || preset.area.height < MIN_AREA_MM {
-            return Err(format!("preset {}: the area must be at least {MIN_AREA_MM} mm on each side", preset.name));
+            problems.push(format!("preset {}: the area must be at least {MIN_AREA_MM} mm on each side", preset.name));
+            preset.area.width = preset.area.width.max(MIN_AREA_MM);
+            preset.area.height = preset.area.height.max(MIN_AREA_MM);
         }
     }
     if let Some(name) = active_name {
-        s.active = s.presets.iter().position(|p| p.name == name).ok_or(format!("no preset named {name}"))?;
+        match s.presets.iter().position(|p| p.name == name) {
+            Some(index) => s.active = index,
+            None => problems.push(format!("active_preset: no preset named {name}")),
+        }
     }
-    Ok(s)
+    if !theme::is_built_in(&s.theme) && !s.saved_themes.iter().any(|t| t.name == s.theme) {
+        problems.push(format!("theme: no theme named {}", s.theme));
+        s.theme = DEFAULT_THEME.to_string();
+    }
+    Parsed { settings: s, problems }
 }
 
-pub fn load(path: &Path) -> Result<Option<Settings>, String> {
+pub fn load(path: &Path) -> Result<Option<Parsed>, String> {
     match fs::read_to_string(path) {
-        Ok(text) => from_text(&text).map(Some),
+        Ok(text) => Ok(Some(parse(&text))),
         Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(e.to_string()),
     }
 }
 
+/// Keeps a copy of a file with problems, because saving replaces it.
+pub fn back_up(path: &Path) -> io::Result<PathBuf> {
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let copy = path.with_file_name(format!("config-problem-{stamp}.toml"));
+    fs::copy(path, &copy)?;
+    Ok(copy)
+}
+
+/// Replaces the file in one step, so a crash or power cut can't leave half of it.
 pub fn save(path: &Path, settings: &Settings) -> io::Result<()> {
     if let Some(dir) = path.parent() {
         fs::create_dir_all(dir)?;
     }
-    fs::write(path, to_text(settings))
+    let temporary = path.with_extension("toml.tmp");
+    fs::write(&temporary, to_text(settings))?;
+    fs::rename(&temporary, path)
 }
 
 fn orientation_size(rotation: Option<Rotation>) -> (f64, f64) {
@@ -436,17 +765,44 @@ mod tests {
                 tip_click: false,
                 button_key: "z".into(),
                 show_outline: false,
+                theme: "Mine".into(),
+                theme_overrides: ThemeOverrides {
+                    outline: Some(Rgb(1, 2, 3)),
+                    outline_thickness: Some(4.5),
+                    outside_dim: Some(70),
+                    ..Default::default()
+                },
+                saved_themes: vec![Theme { name: "Mine".into(), outside_dim: 12, ..theme::built_in().remove(1) }],
+                animations: false,
+                show_area_label: false,
+                hold_to_edit_seconds: 2.5,
+                edit_timeout_seconds: 60.0,
+                close_to_tray: false,
+                start_minimized: true,
+                open_tablet_app: false,
+                screen_pinning: true,
+                usb_path: UsbPath::Direct,
             };
-            assert_eq!(from_text(&to_text(&s)).unwrap(), s);
+            let parsed = parse(&to_text(&s));
+            assert_eq!(parsed.problems, Vec::<String>::new());
+            assert_eq!(parsed.settings, s);
         }
     }
 
     #[test]
+    fn default_settings_round_trip_with_no_problems() {
+        let parsed = parse(&to_text(&Settings::default()));
+        assert_eq!(parsed.problems, Vec::<String>::new());
+        assert_eq!(parsed.settings, Settings::default());
+    }
+
+    #[test]
     fn reads_the_older_single_area_file() {
-        let s = from_text(
+        let parsed = parse(
             "orientation = landscape-usb-right\narea_width_mm = 120\narea_height_mm = 75\narea_offset_x_mm = 1\narea_offset_y_mm = 2\n",
-        )
-        .unwrap();
+        );
+        assert_eq!(parsed.problems, Vec::<String>::new());
+        let s = parsed.settings;
         assert_eq!(s.rotation, Some(Rotation::R90));
         assert_eq!(s.presets.len(), 1);
         assert_eq!(s.area(), AreaMm { width: 120.0, height: 75.0, offset_x: 1.0, offset_y: 2.0, rotation_deg: 0.0 });
@@ -488,15 +844,114 @@ mod tests {
     }
 
     #[test]
-    fn bad_files_are_rejected() {
-        assert!(from_text("orientation = sideways").is_err());
-        assert!(from_text("output = windows-ink").is_err());
-        assert!(from_text("area_width_mm = wide").is_err());
-        assert!(from_text("area_width_mm = NaN").is_err());
-        assert!(from_text("area_width_mm = 1").is_err());
-        assert!(from_text("mystery = 1").is_err());
-        assert!(from_text("no equals sign").is_err());
-        assert!(from_text("active_preset = Missing").is_err());
-        assert!(from_text("[preset Oops]\nwidth_mm = 2").is_err());
+    fn files_from_before_round_2_keep_their_settings_and_get_the_new_defaults() {
+        let parsed = parse(
+            "output = direct\norientation = landscape-usb-right\nactive_preset = Small\naspect_lock = true\ntip_click = false\nshow_outline = true\nbutton_key = z\n\n[preset Default]\nwidth_mm = 200\nheight_mm = 125\noffset_x_mm = 0\noffset_y_mm = 0\nrotation_deg = 0\n\n[preset Small]\nwidth_mm = 88\nheight_mm = 55\noffset_x_mm = 3\noffset_y_mm = 0\nrotation_deg = 0\n",
+        );
+        assert_eq!(parsed.problems, Vec::<String>::new());
+        let s = parsed.settings;
+        assert_eq!(s.area().width, 88.0);
+        assert!(!s.tip_click);
+        assert_eq!(s.button_key, "z");
+        assert_eq!(s.theme, DEFAULT_THEME);
+        assert!(s.animations);
+        assert_eq!(s.usb_path, UsbPath::Adb);
+    }
+
+    #[test]
+    fn top_level_settings_after_a_preset_still_count() {
+        let parsed = parse("[preset A]\nwidth_mm = 100\nheight_mm = 62\ntip_click = false\nactive_preset = A\n");
+        assert_eq!(parsed.problems, Vec::<String>::new());
+        assert!(!parsed.settings.tip_click);
+        assert_eq!(parsed.settings.area().width, 100.0);
+    }
+
+    #[test]
+    fn one_bad_line_only_costs_that_line() {
+        let parsed = parse("tip_click = false\norientation = sideways\nbutton_key = z\n");
+        assert_eq!(parsed.problems.len(), 1);
+        assert!(parsed.problems[0].starts_with("line 2: orientation"), "{}", parsed.problems[0]);
+        assert!(!parsed.settings.tip_click);
+        assert_eq!(parsed.settings.button_key, "z");
+        assert_eq!(parsed.settings.rotation, None);
+    }
+
+    #[test]
+    fn bad_values_are_reported_and_replaced() {
+        for bad in [
+            "orientation = sideways",
+            "output = windows-ink",
+            "area_width_mm = wide",
+            "area_width_mm = NaN",
+            "area_width_mm = 1",
+            "mystery = 1",
+            "no equals sign",
+            "active_preset = Missing",
+            "[preset Oops]\nwidth_mm = 2",
+            "[preset]",
+            "theme = Missing",
+            "[theme Daylight]",
+            "color_accent = pink",
+            "outline_thickness = 900",
+            "outside_dim = 101",
+            "hold_to_edit_seconds = 0",
+            "edit_timeout_seconds = 9999",
+            "usb_path = wifi",
+        ] {
+            let parsed = parse(bad);
+            assert!(!parsed.problems.is_empty(), "{bad}");
+            assert!(parsed.settings.area().width >= MIN_AREA_MM);
+            assert!(parsed.settings.active < parsed.settings.presets.len());
+            let again = parse(&to_text(&parsed.settings));
+            assert_eq!(again.problems, Vec::<String>::new(), "{bad} saved something unreadable");
+        }
+    }
+
+    #[test]
+    fn a_problem_file_is_copied_before_it_can_be_replaced() {
+        let dir = std::env::temp_dir().join(format!("osutab-test-backup-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.toml");
+        fs::write(&path, "orientation = sideways\n").unwrap();
+        let copy = back_up(&path).unwrap();
+        assert_eq!(fs::read_to_string(copy).unwrap(), "orientation = sideways\n");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn saving_replaces_the_whole_file_and_leaves_nothing_behind() {
+        let dir = std::env::temp_dir().join(format!("osutab-test-save-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join("config.toml");
+        for active_width in [100.0, 200.0] {
+            let mut s = Settings::default();
+            s.area_mut().width = active_width;
+            save(&path, &s).unwrap();
+            assert_eq!(load(&path).unwrap().unwrap().settings.area().width, active_width);
+        }
+        let names: Vec<_> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert_eq!(names, ["config.toml"]);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn themes_can_be_saved_chosen_and_deleted() {
+        let mut s = Settings::default();
+        s.theme_overrides.outline = Some(Rgb(9, 8, 7));
+        s.save_theme("Mine").unwrap();
+        assert_eq!(s.theme, "Mine");
+        assert_eq!(s.theme_overrides, ThemeOverrides::default());
+        assert_eq!(s.active_theme().outline, Rgb(9, 8, 7));
+
+        s.choose_theme("Daylight");
+        assert_eq!(s.active_theme().name, "Daylight");
+        assert!(!s.delete_saved_theme(), "a built-in theme can't be deleted");
+        assert!(s.save_theme("Daylight").is_err());
+
+        s.choose_theme("Mine");
+        assert!(s.delete_saved_theme());
+        assert_eq!(s.theme, DEFAULT_THEME);
+        assert!(s.saved_themes.is_empty());
     }
 }
