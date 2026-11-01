@@ -64,7 +64,7 @@ Every setting below is on the **Settings** or **Appearance** tab with its own Re
 
 ### Direct USB
 
-Normally the pen's reports pass through `adb.exe`. **Direct USB**, on the Settings tab, reads them from the USB connection instead. It's an experiment, and the default path is the one to use: in testing it made no reliable difference to the pen. See [Reading the latency numbers](#reading-the-latency-numbers).
+Normally the pen's reports pass through `adb.exe`. **Direct USB**, on the Settings tab, reads them from the USB connection instead. In testing it was slightly faster, and steadier when the CPU was busy. See [Reading the latency numbers](#reading-the-latency-numbers). The Settings tab also shows whether the link is running at USB 2 or USB 3 speed.
 
 adb.exe still does the setup, such as installing the tablet app, and then osutab stops it while the pen is in use. Anything else using adb on this PC, such as Android Studio, loses the tablet until osutab quits. If direct USB fails, osutab says so on the Play tab and uses adb.exe until the next plug-in.
 
@@ -159,14 +159,24 @@ With the orientation set to follow the screen, the tablet app tells the PC whene
 
 It doesn't include the S Pen's own hardware delay, the game or your display.
 
-Measured with simulated reports at 480 Hz over 40 s, three runs of each, without `SendInput`, in ms:
+Measured with simulated reports at 480 Hz over 20 s, three runs of each, without `SendInput`, in ms. "Busy" has every CPU core kept busy at normal priority, as a harsh stand-in for a game.
 
-| | Median | 99th percentile | 99.9th percentile | Worst |
-|---|---|---|---|---|
-| adb.exe | 0.66–0.69 | 1.16–1.24 | 2.6–4.3 | 12.7–13.2 |
-| Direct USB | 0.65–0.68 | 1.14–1.18 | 3.6–16.9 | 13.1–35.4 |
+| | PC | Median | 99th percentile | 99.9th percentile | Worst |
+|---|---|---|---|---|---|
+| adb.exe, without the tuning below | Quiet | 0.67–0.74 | 1.00–1.09 | 1.5–6.5 | 12.3–12.7 |
+| adb.exe | Quiet | 0.54–0.56 | 0.84–0.92 | 1.5–7.8 | 12.3–14.6 |
+| Direct USB | Quiet | 0.53–0.54 | 0.79–0.83 | 1.3–3.8 | 12.2–12.4 |
+| adb.exe, without the tuning below | Busy | 0.97–1.49 | 20.9–37.5 | 29–53 | 33–63 |
+| adb.exe | Busy | 0.49–0.55 | 0.77–2.19 | 1.8–10.8 | 13.0–17.9 |
+| Direct USB | Busy | 0.38–0.54 | 0.66–0.81 | 1.4–2.1 | 4.4–12.7 |
 
-Round trips do improve on direct USB, with the 99.9th percentile going from about 12 ms to about 3.6 ms. Those include the PC-to-tablet direction, which pen reports don't use.
+The tuning is what osutab now does by default:
+
+- It raises `adb.exe` to high priority, which made most of the difference on a busy PC.
+- It runs the tablet helper on the tablet's faster cores, which took about 0.13 ms off the median.
+- It stops Windows treating osutab and `adb.exe` as background work to slow down.
+
+Two things that were tried and left out, because they didn't reliably help: Windows' multimedia scheduler, and keeping threads on one group of the CPU's cores. A worst case of about 12 ms shows up on every path, and its cause hasn't been found.
 
 ## Files
 
@@ -207,6 +217,8 @@ Started from a terminal, osutab prints its messages there.
 | `--no-app` | Doesn't install or open the tablet app. |
 | `--tab NAME` | Opens on a tab: `play`, `area`, `latency`, `precision`, `appearance` or `settings`. |
 | `--usb-path adb\|direct` | Overrides the saved USB path for this run. |
+| `--no-tuning` | Leaves out the scheduling choices above, to measure what they do. |
+| `--cpu-burn SECONDS` | Keeps every CPU core busy, to test with a loaded PC. No tablet needed. |
 | `--duration SECONDS` | Stops automatically and prints a summary. |
 | `--dry-run` | Measures without injecting any input. |
 | `--test-mode` | Starts with the precision test on, with no time limit. |

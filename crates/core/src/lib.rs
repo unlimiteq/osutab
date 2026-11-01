@@ -277,9 +277,30 @@ impl PenDecoder {
     }
 }
 
+/// Which CPU cores to prefer, as a bitmask, given each core's top speed: everything except the
+/// slowest group. `None` when there's no choice to make.
+pub fn fast_core_mask(max_speeds: &[u64]) -> Option<u64> {
+    let slowest = *max_speeds.iter().min()?;
+    let mask = max_speeds
+        .iter()
+        .enumerate()
+        .filter(|(core, speed)| *core < 64 && **speed > slowest)
+        .fold(0u64, |mask, (core, _)| mask | 1 << core);
+    (mask != 0).then_some(mask)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fast_cores_leave_out_only_the_slowest_group() {
+        // This tablet: four slow cores, three faster and one fastest.
+        let tab_s8_ultra = [1785600, 1785600, 1785600, 1785600, 2496000, 2496000, 2496000, 2995200];
+        assert_eq!(fast_core_mask(&tab_s8_ultra), Some(0b1111_0000));
+        assert_eq!(fast_core_mask(&[2000, 2000, 2000]), None, "all the same");
+        assert_eq!(fast_core_mask(&[]), None, "unknown");
+    }
 
     #[test]
     fn sample_round_trip() {

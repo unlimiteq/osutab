@@ -64,6 +64,7 @@ extern "C" {
     fn ioctl(fd: i32, request: u64, ...) -> i32;
     fn poll(fds: *mut PollFd, count: u64, timeout: i32) -> i32;
     fn clock_gettime(clock: i32, out: *mut Timespec) -> i32;
+    fn sched_setaffinity(pid: i32, size: usize, mask: *const u64) -> i32;
 }
 
 fn monotonic_ns() -> u64 {
@@ -121,6 +122,20 @@ fn read_snapshot(file: &File) -> io::Result<PenSnapshot> {
         touch: key(BTN_TOUCH),
         button: key(BTN_STYLUS),
     })
+}
+
+/// Left to itself, Android can run this on a slow core. Staying off those took about 0.13 ms off
+/// the median. It's a small program that mostly sleeps, so this costs very little battery.
+fn prefer_fast_cores() {
+    let speeds: Vec<u64> = (0..64)
+        .map_while(|core| fs::read_to_string(format!("/sys/devices/system/cpu/cpu{core}/cpufreq/cpuinfo_max_freq")).ok())
+        .filter_map(|text| text.trim().parse().ok())
+        .collect();
+    if let Some(mask) = fast_core_mask(&speeds) {
+        if unsafe { sched_setaffinity(0, 8, &mask) } != 0 {
+            eprintln!("[helper] could not choose cores: {}", io::Error::last_os_error());
+        }
+    }
 }
 
 fn accept_client(listener: &UnixListener) -> io::Result<UnixStream> {
@@ -256,6 +271,9 @@ fn run() -> io::Result<()> {
     let burst = args.iter().position(|a| a == "--burst").and_then(|i| {
         Some((args.get(i + 1)?.parse::<u64>().ok()?, args.get(i + 2)?.parse::<u64>().ok()?))
     });
+    if !args.iter().any(|a| a == "--any-core") {
+        prefer_fast_cores();
+    }
     let ping_timeout_ms = args.iter().position(|a| a == "--ping-timeout-ms").and_then(|i| args.get(i + 1)?.parse::<i32>().ok());
     let mut pen = find_pen()?;
     let fd = pen.as_raw_fd();

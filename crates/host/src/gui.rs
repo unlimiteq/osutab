@@ -1320,9 +1320,14 @@ impl App {
                 app.shared.update_settings(|st| st.usb_path = d.usb_path);
                 app.changed();
             }
-            ui.label(RichText::new("Direct USB skips adb.exe. In testing it made no reliable difference to the pen: the median was about the same, and the worst delays were sometimes higher. It also stops adb.exe while osutab runs, so anything else using adb on this PC, such as Android Studio, loses the tablet. Applies the next time the tablet connects.").color(app.palette.muted).small());
+            ui.label(RichText::new("Direct USB skips adb.exe. In testing it was slightly faster than adb.exe, and steadier when the CPU was busy. It stops adb.exe while osutab runs, so anything else using adb on this PC, such as Android Studio, loses the tablet. Applies the next time the tablet connects.").color(app.palette.muted).small());
             let active = app.shared.direct_active.load(Ordering::SeqCst);
-            ui.label(RichText::new(if active { "Now: direct USB" } else { "Now: adb.exe" }).color(app.palette.muted).small());
+            let now = match (active, app.shared.usb3_link.load(Ordering::SeqCst)) {
+                (true, true) => "Now: direct USB, on a USB 3 link",
+                (true, false) => "Now: direct USB, on a USB 2 link",
+                (false, _) => "Now: adb.exe",
+            };
+            ui.label(RichText::new(now).color(app.palette.muted).small());
         });
     }
 

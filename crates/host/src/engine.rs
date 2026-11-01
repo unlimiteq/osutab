@@ -18,6 +18,7 @@ use crate::settings::{Output, UsbPath};
 use crate::shared::{LiveConfig, Shared};
 use crate::stats::{ClockSync, Event, PrecisionSample, SampleTiming};
 use crate::trace::{Entry, Recorder};
+use crate::tuning;
 use crate::usbadb::DirectLink;
 
 const FORWARD_PORT: u16 = 27191;
@@ -59,6 +60,8 @@ pub struct EngineOptions {
     pub burst: Option<(u64, u64)>,
     /// Overrides the saved USB path for this run.
     pub usb_path: Option<UsbPath>,
+    /// Turns on the scheduling choices that help under load. Only off to measure them.
+    pub tuning: bool,
 }
 
 impl EngineOptions {
@@ -75,6 +78,9 @@ impl EngineOptions {
         }
         if let Some((on, off)) = self.burst {
             args.push(format!("--burst {on} {off}"));
+        }
+        if !self.tuning {
+            args.push("--any-core".to_string());
         }
         args.join(" ")
     }
@@ -197,18 +203,21 @@ fn ping_interval(options: &EngineOptions) -> Duration {
 
 /// Pings until `send` fails.
 fn start_pinger(interval: Duration, clock: Instant, mut send: impl FnMut(u64) -> io::Result<()> + Send + 'static) {
-    std::thread::spawn(move || loop {
-        if send(clock.elapsed().as_nanos() as u64).is_err() {
-            break;
-        }
-        if interval < Duration::from_millis(5) {
-            // Sleep can't reliably wait this short, and the benchmark needs a steady rate.
-            let t0 = Instant::now();
-            while t0.elapsed() < interval {
-                std::hint::spin_loop();
+    std::thread::spawn(move || {
+        tuning::raise_this_thread();
+        loop {
+            if send(clock.elapsed().as_nanos() as u64).is_err() {
+                break;
             }
-        } else {
-            std::thread::sleep(interval);
+            if interval < Duration::from_millis(5) {
+                // Sleep can't reliably wait this short, and the benchmark needs a steady rate.
+                let t0 = Instant::now();
+                while t0.elapsed() < interval {
+                    std::hint::spin_loop();
+                }
+            } else {
+                std::thread::sleep(interval);
+            }
         }
     });
 }
@@ -400,6 +409,9 @@ fn run_session(options: &EngineOptions, shared: &Arc<Shared>, injector: &mut Inj
     let result = (|| {
         let (stream, hello) = connect(Instant::now() + HELLO_TIMEOUT)?;
         *had_hello = true;
+        if options.tuning {
+            tuning::apply_to_adb();
+        }
         session_started(Some(adb), shared, disconnected_at, &hello);
         let mut pinger = stream.try_clone()?;
         start_pinger(ping_interval(options), shared.clock, move |host_ns| pinger.write_all(&UpFrame::Ping { host_ns }.encode()));
@@ -432,6 +444,7 @@ fn run_direct_session(options: &EngineOptions, shared: &Arc<Shared>, injector: &
     let (mut link, hello) = DirectLink::start(&args, control::APP_PORT)?;
     *had_hello = true;
     shared.direct_active.store(true, Ordering::SeqCst);
+    shared.usb3_link.store(link.is_usb3(), Ordering::SeqCst);
     session_started(None, shared, disconnected_at, &hello);
     let pinger = link.pinger();
     start_pinger(ping_interval(options), shared.clock, move |host_ns| pinger.ping(host_ns));

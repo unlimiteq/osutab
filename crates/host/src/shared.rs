@@ -50,6 +50,8 @@ pub struct Shared {
     pub tray_thread: AtomicU32,
     /// True while the pen is coming over direct USB rather than through adb.exe.
     pub direct_active: AtomicBool,
+    /// Whether the direct USB link is running at USB 3 speed.
+    pub usb3_link: AtomicBool,
     /// True once this program has pinned the tablet app.
     pub pinned: AtomicBool,
     /// Something to tell the person, such as a settings file that had problems.
@@ -109,6 +111,7 @@ impl Shared {
             window: AtomicIsize::new(0),
             tray_thread: AtomicU32::new(0),
             direct_active: AtomicBool::new(false),
+            usb3_link: AtomicBool::new(false),
             pinned: AtomicBool::new(false),
             notice: Mutex::new(None),
             direct_problem: Mutex::new(None),

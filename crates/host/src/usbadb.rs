@@ -138,6 +138,7 @@ pub struct UsbPipes {
     winusb: WINUSB_INTERFACE_HANDLE,
     pipe_in: u8,
     pipe_out: u8,
+    usb3: bool,
     send_lock: Mutex<()>,
 }
 
@@ -167,12 +168,14 @@ impl UsbPipes {
                 CloseHandle(device);
                 return Err(e);
             }
-            let mut pipes = UsbPipes { device, winusb, pipe_in: 0, pipe_out: 0, send_lock: Mutex::new(()) };
+            let mut pipes = UsbPipes { device, winusb, pipe_in: 0, pipe_out: 0, usb3: false, send_lock: Mutex::new(()) };
             let mut info: WINUSB_PIPE_INFORMATION = zeroed();
             let mut index = 0;
             while WinUsb_QueryPipe(winusb, 0, index, &mut info) != 0 {
                 if info.PipeType == UsbdPipeTypeBulk {
                     if info.PipeId & 0x80 != 0 {
+                        // The USB standard sets this size, so it reveals the link's speed.
+                        pipes.usb3 = info.MaximumPacketSize >= 1024;
                         pipes.pipe_in = info.PipeId;
                     } else {
                         pipes.pipe_out = info.PipeId;
@@ -404,6 +407,10 @@ impl DirectLink {
         Ok((link, hello))
     }
 
+    pub fn is_usb3(&self) -> bool {
+        self.pipes.usb3
+    }
+
     pub fn pinger(&self) -> DirectPinger {
         DirectPinger {
             pipes: self.pipes.clone(),
@@ -507,6 +514,7 @@ impl DirectLink {
 
         let (pipes, closed) = (self.pipes.clone(), self.closed.clone());
         std::thread::spawn(move || {
+            crate::tuning::raise_this_thread();
             let mut chunk = [0u8; 4096];
             while let Ok(n) = reader.read(&mut chunk) {
                 if n == 0 {
