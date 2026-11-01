@@ -6,6 +6,8 @@ import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.Paint
 import android.graphics.Path
+import android.graphics.RectF
+import android.graphics.Typeface
 import android.os.SystemClock
 import android.view.InputDevice
 import android.view.MotionEvent
@@ -47,6 +49,17 @@ class AreaView(
             fadeContentIn()
             invalidate()
         }
+    /** In a floating window the area would show in the wrong place, so it isn't drawn at all. */
+    var floating = false
+        set(value) {
+            if (field == value) return
+            field = value
+            if (value) {
+                cancelHold()
+                setEditing(false)
+            }
+            invalidate()
+        }
     var showOutline = true
         set(value) {
             if (field != value) {
@@ -80,19 +93,36 @@ class AreaView(
     private val fillPaint = Paint()
     private val outlinePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val handlePaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 34f }
-    private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 26f }
+    private val regular = Typeface.createFromAsset(context.assets, "fonts/Geist-Regular.ttf")
+    private val semibold = Typeface.createFromAsset(context.assets, "fonts/Geist-SemiBold.ttf")
+    private val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 40f
+        typeface = semibold
+    }
+    private val smallPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 26f
+        typeface = regular
+    }
     private val buttonPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val buttonTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { textSize = 26f }
-    private val buttonEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        strokeWidth = 2f
+    private val buttonTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        textSize = 24f
+        typeface = semibold
     }
     private val holdPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        strokeWidth = 6f
+        strokeWidth = 5f
         strokeCap = Paint.Cap.ROUND
     }
+    private val logoPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 12f
+        color = LOGO_COLOR
+    }
+    private val handleEdgePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+        style = Paint.Style.STROKE
+        strokeWidth = 4f
+    }
+    private val pillRect = RectF()
     private val areaPath = Path()
 
     private val pxPerMm: Double get() = width / state.tabletWidth
@@ -133,9 +163,10 @@ class AreaView(
         handlePaint.color = theme.accent
         textPaint.color = theme.text
         smallPaint.color = theme.muted
-        buttonPaint.color = theme.panel
+        // A tablet with the same shade for panels and background still needs to show the button.
+        buttonPaint.color = if (theme.panel == theme.outside) theme.line else theme.panel
         buttonTextPaint.color = theme.text
-        buttonEdgePaint.color = theme.line
+        handleEdgePaint.color = theme.background
         holdPaint.color = theme.accent
         if (!theme.animations) {
             glide?.cancel()
@@ -213,12 +244,20 @@ class AreaView(
     override fun onDraw(canvas: Canvas) {
         val alpha = (contentAlpha * 255).toInt()
         // There's no area to set off here, and the theme's text is only sure to read on its background.
-        canvas.drawColor(if (connected) theme.outside else theme.background)
+        canvas.drawColor(if (connected && !floating) theme.outside else theme.background)
+        if (floating) {
+            canvas.drawCircle(width / 2f, height / 2f - 90f, LOGO_RADIUS_PX, logoPaint)
+            drawCentred(canvas, "Make this window full screen", height / 2f + 20f, textPaint)
+            drawCentred(canvas, "The pen area only lines up at full screen. Use the button in the title bar.", height / 2f + 66f, smallPaint)
+            return
+        }
         if (!connected) {
             textPaint.alpha = alpha
             smallPaint.alpha = alpha
-            drawCentred(canvas, "Waiting for the PC", height / 2f - 10f, textPaint)
-            drawCentred(canvas, "Start osutab on your computer. You can edit the area once it connects.", height / 2f + 30f, smallPaint)
+            logoPaint.alpha = alpha
+            canvas.drawCircle(width / 2f, height / 2f - 90f, LOGO_RADIUS_PX, logoPaint)
+            drawCentred(canvas, "Waiting for the PC", height / 2f + 20f, textPaint)
+            drawCentred(canvas, "Start osutab on your computer.", height / 2f + 66f, smallPaint)
             textPaint.alpha = 255
             smallPaint.alpha = 255
             return
@@ -234,20 +273,22 @@ class AreaView(
             canvas.drawPath(areaPath, outlinePaint)
             if (handleAlpha > 0f) {
                 handlePaint.alpha = (handleAlpha * 255).toInt()
-                for (corner in corners) canvas.drawCircle(corner.first, corner.second, HANDLE_RADIUS_PX, handlePaint)
+                handleEdgePaint.alpha = handlePaint.alpha
+                for (corner in corners) {
+                    canvas.drawCircle(corner.first, corner.second, HANDLE_RADIUS_PX, handlePaint)
+                    canvas.drawCircle(corner.first, corner.second, HANDLE_RADIUS_PX, handleEdgePaint)
+                }
             }
             if (prefs.showAreaLabel || editing) {
                 val cx = (corners[0].first + corners[2].first) / 2
                 val cy = (corners[0].second + corners[2].second) / 2
                 val label = "%.1f × %.1f mm".format(state.width, state.height)
-                val detail = state.sensitivityLabel()
-                canvas.drawText(label, cx - textPaint.measureText(label) / 2, cy - 8f, textPaint)
-                canvas.drawText(detail, cx - smallPaint.measureText(detail) / 2, cy + 28f, smallPaint)
-                canvas.drawText(state.preset, cx - smallPaint.measureText(state.preset) / 2, cy + 62f, smallPaint)
+                val detail = "${state.preset}  ·  ${state.sensitivityLabel()}"
+                canvas.drawText(label, cx - textPaint.measureText(label) / 2, cy, textPaint)
+                canvas.drawText(detail, cx - smallPaint.measureText(detail) / 2, cy + 42f, smallPaint)
             }
         }
         canvas.drawCircle(BUTTON_CENTRE_PX, height - BUTTON_CENTRE_PX, BUTTON_RADIUS_PX, buttonPaint)
-        canvas.drawCircle(BUTTON_CENTRE_PX, height - BUTTON_CENTRE_PX, BUTTON_RADIUS_PX, buttonEdgePaint)
         if (holdProgress > 0f && !editing) {
             canvas.drawArc(
                 BUTTON_CENTRE_PX - BUTTON_RADIUS_PX,
@@ -261,8 +302,17 @@ class AreaView(
             )
         }
         val button = if (editing) "Done" else "Hold"
-        canvas.drawText(button, BUTTON_CENTRE_PX - buttonTextPaint.measureText(button) / 2, height - BUTTON_CENTRE_PX + 9f, buttonTextPaint)
-        if (editing) drawCentred(canvas, "Drag to move. Drag a corner dot or pinch to resize.", 44f, smallPaint)
+        canvas.drawText(button, BUTTON_CENTRE_PX - buttonTextPaint.measureText(button) / 2, height - BUTTON_CENTRE_PX + 8f, buttonTextPaint)
+        if (editing) drawEditHint(canvas)
+    }
+
+    private fun drawEditHint(canvas: Canvas) {
+        val text = "Drag to move. Drag a corner dot or pinch to resize."
+        val halfWidth = smallPaint.measureText(text) / 2 + 28f
+        // Low enough to clear the window handle Samsung's tablets show at the top of the screen.
+        pillRect.set(width / 2f - halfWidth, 90f, width / 2f + halfWidth, 150f)
+        canvas.drawRoundRect(pillRect, 30f, 30f, buttonPaint)
+        drawCentred(canvas, text, 129f, smallPaint)
     }
 
     private fun drawCentred(canvas: Canvas, text: String, y: Float, paint: Paint) {
@@ -271,7 +321,7 @@ class AreaView(
 
     // During play, palms and stray fingers stop here. Only holding the corner button responds.
     override fun onTouchEvent(event: MotionEvent): Boolean {
-        if (!connected) return true
+        if (!connected || floating) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
                 if (inEditButton(event.x, event.y)) {
@@ -390,7 +440,9 @@ class AreaView(
         const val HANDLE_RADIUS_PX = 18f
         const val BUTTON_SIZE_PX = 150f
         const val BUTTON_CENTRE_PX = 70f
-        const val BUTTON_RADIUS_PX = 60f
+        const val BUTTON_RADIUS_PX = 48f
+        const val LOGO_RADIUS_PX = 34f
+        val LOGO_COLOR = Color.rgb(0xff, 0x5f, 0xa2)
         const val ECHO_GUARD_MS = 500L
         const val GLIDE_MS = 150L
         const val FADE_MS = 200L

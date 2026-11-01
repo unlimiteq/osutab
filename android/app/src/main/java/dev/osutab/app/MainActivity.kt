@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.pm.ActivityInfo
 import android.content.res.Configuration
 import android.graphics.Rect
+import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
@@ -79,6 +80,27 @@ class MainActivity : Activity() {
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
         if (hasFocus) hideSystemBars()
+    }
+
+    override fun onTopResumedActivityChanged(isTopResumed: Boolean) {
+        super.onTopResumedActivityChanged(isTopResumed)
+        if (isTopResumed) askForFullScreen()
+    }
+
+    override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
+        super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
+        view.floating = isInMultiWindowMode
+    }
+
+    /**
+     * The area only lines up with the pen at full screen, but a tablet in its desktop mode opens
+     * apps in a floating window. If Android says no, the view asks the user instead.
+     */
+    private fun askForFullScreen() {
+        view.floating = isInMultiWindowMode
+        if (isInMultiWindowMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
+            requestFullscreenMode(FULLSCREEN_MODE_REQUEST_ENTER, null)
+        }
     }
 
     private fun hideSystemBars() {
