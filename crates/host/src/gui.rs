@@ -1633,8 +1633,10 @@ impl eframe::App for App {
         let settings = self.shared.settings();
         self.apply_appearance(ctx, &settings);
         let has_tray = self.shared.tray_thread.load(Ordering::SeqCst) != 0;
+        let setup_done = self.shared.setup_done.load(Ordering::SeqCst);
         if ctx.input(|i| i.viewport().close_requested()) {
-            if has_tray && settings.close_to_tray {
+            // During setup nothing is running yet, so there's nothing to keep going in the tray.
+            if setup_done && has_tray && settings.close_to_tray {
                 ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
                 self.hide_window();
             } else {
@@ -1642,7 +1644,6 @@ impl eframe::App for App {
             }
         }
         // Waits for the tray icon, or the window could vanish with no way back to it.
-        let setup_done = self.shared.setup_done.load(Ordering::SeqCst);
         if self.hide_at_start && has_tray && setup_done {
             self.hide_at_start = false;
             self.hide_window();

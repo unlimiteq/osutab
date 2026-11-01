@@ -39,6 +39,10 @@ class MainActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // Shows above the lock screen, so a palm has nothing else to touch and no PIN is needed to
+        // play. The lock itself stays on: leaving this app still asks for the PIN.
+        setShowWhenLocked(true)
+        setTurnScreenOn(true)
         window.attributes = window.attributes.apply {
             layoutInDisplayCutoutMode = WindowManager.LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
         }
