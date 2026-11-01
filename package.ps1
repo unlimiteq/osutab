@@ -9,6 +9,7 @@ $dist = Join-Path $PSScriptRoot 'dist\osutab'
 New-Item -ItemType Directory -Force (Join-Path $dist 'platform-tools') | Out-Null
 Copy-Item (Join-Path $PSScriptRoot 'target\release\osutab.exe') $dist -Force
 Copy-Item (Join-Path $PSScriptRoot 'README.md') $dist -Force
+Copy-Item (Join-Path $PSScriptRoot 'docs') $dist -Recurse -Force
 Copy-Item (Join-Path $PSScriptRoot 'assets\fonts\OFL.txt') (Join-Path $dist 'LICENSE-Geist-font.txt') -Force
 $adb = Join-Path $PSScriptRoot 'tools\platform-tools'
 foreach ($file in 'adb.exe', 'AdbWinApi.dll', 'AdbWinUsbApi.dll', 'NOTICE.txt') {

@@ -1,234 +1,170 @@
-# osutab
+<p align="center">
+  <img src="docs/images/logo.svg" width="112" alt="osutab logo">
+</p>
 
-Turns a Galaxy Tab S8 Ultra and S Pen into a USB pen tablet for osu! on Windows, with about 0.8 ms of added latency. It's free, needs no root and no kernel driver, and connects only by the USB cable.
+<h1 align="center">osutab</h1>
 
-Tested in osu!lazer. It hasn't been tried in osu!stable yet.
+<p align="center">
+  <strong>Use a Samsung tablet and S Pen as a low-latency pen tablet for osu!</strong><br>
+  Free. USB only. No root and no kernel driver.
+</p>
 
-## Getting started
+<p align="center">
+  <img src="https://img.shields.io/badge/PC-Windows-3b82f6" alt="PC: Windows">
+  <img src="https://img.shields.io/badge/tablet-Android-22c55e" alt="Tablet: Android">
+  <img src="https://img.shields.io/badge/connection-USB-a855f7" alt="Connection: USB">
+  <img src="https://img.shields.io/badge/added%20latency-under%201%20ms-ff5fa2" alt="Added latency: under 1 ms">
+  <img src="https://img.shields.io/badge/status-early-f59e0b" alt="Status: early">
+</p>
 
-1. On the tablet, turn on **USB debugging**. Go to Settings > About tablet > Software information and tap Build number seven times. Then go to Settings > Developer options and turn on USB debugging.
-2. Connect the tablet to your PC with a USB cable.
-3. Run `osutab.exe`, then answer its two questions: how the tablet sits, and how big the pen area should be.
-4. On the tablet, tap **Allow** on the "Allow USB debugging?" prompt, and tick "Always allow from this computer". Approve the osutab app if Android asks.
-5. In lazer, turn off **High precision mouse** (Settings > Input > Mouse).
+<p align="center">
+  <img src="docs/images/play.png" width="760" alt="The osutab window, showing Ready to play">
+</p>
 
-The **Play** tab checks all of this and tells you what's left. When it says "Ready to play", you're set.
+## What it does
 
-## Using it
+If you already own a Samsung tablet with an S Pen, you already own a very good drawing surface. osutab lets you play osu! on it. Plug the tablet into your PC, and the pen moves your cursor with no noticeable delay.
 
-Closing the window keeps osutab running in the tray, so it's out of the way while you play. Click the tray icon to bring it back. **Quit**, in the window or the tray menu, stops osutab and gives the pen back to Android. Starting osutab again while it's running just brings up its window.
+It reads the pen directly on the tablet, sends each report over the USB cable and places the cursor exactly where the pen says. There's no smoothing, no prediction and no acceleration in the way.
 
-Unplugging and replugging recovers by itself, and so does changing your resolution or main monitor. Settings are saved as you change them.
+> [!IMPORTANT]
+> osutab is an early project. It has only been tested with a **Samsung Galaxy Tab S8 Ultra** and **osu!lazer** on Windows. Compatibility with anything else is still unknown. See [Compatibility](#compatibility).
 
-### Before you play
+## Features
 
-- Close **PowerToys**, **Wallpaper Engine** and the **NVIDIA overlay**. In testing, closing all three took the worst delay during play from 91.6 ms to 16.8 ms. The Play tab warns you if any are running. Which of them causes it hasn't been isolated.
-- Leave the precision test off. It turns itself off after 2 minutes, and when you close the window.
+- **Fast:** under 1 ms of added latency in testing, and it stays steady when your PC is busy.
+- **Accurate:** absolute, one-to-one positioning. Pen position and cursor position always agree.
+- **Simple setup:** two questions, then a checklist that tells you what's left to do.
+- **Your pen area, shown on the tablet:** set its size and position on the PC, or move and resize it with your fingers.
+- **Palm friendly:** the tablet app takes every touch, so a resting palm can't open anything inside it.
+- **Live numbers:** see how long each pen report takes, stage by stage, and check the cursor's accuracy.
+- **Looks how you like:** five themes that apply to both the PC and the tablet, plus your own colors.
+- **Works with OpenTabletDriver:** an optional mode for its filters and plugins.
+- **Recovers by itself:** unplug and replug, or change your resolution, and it carries on.
 
-### The tablet's screen
+## Screenshots
 
-The tablet app opens by itself and shows your pen area, its size in mm and the on-screen sensitivity. If the pen goes outside the area, the cursor stays pinned to the screen's edge.
-
-To edit with your fingers, hold the circle in the corner until its ring fills, which takes a second unless you change it. Then drag inside the area to move it, and drag a corner dot or pinch to resize it. Tap the circle when you're done. Edit mode also ends after 20 seconds without changes, or the time you set, so a palm can't move the area during play.
-
-Editing needs the PC, because that's where the area is saved. While osutab isn't connected, the tablet says so and ignores touches.
-
-While osutab runs, Android can't detect the pen, so its palm rejection is off. The app takes every touch itself, so a palm can't press anything in it. Samsung's floating S Pen icon can still be touched. To remove it, turn it off in Settings > Advanced features > S Pen > Air command.
-
-The system bars stay hidden during normal use, but Android doesn't let an ordinary app block them completely. A swipe from the screen's edge brings them back, and the app hides them again about 150 ms later. The Home button can be pressed in that moment. To block Home and Back, turn on **Pin the app** on the Settings tab. It's off by default, because on this tablet leaving a pinned app sends you to the lock screen, so quitting osutab means entering your PIN.
-
-### Themes
-
-The **Appearance** tab has five built-in themes: Midnight, Daylight, OLED Black, Candy and High Contrast. A theme applies to the PC and the tablet straight away, and survives restarts.
-
-You can change the colors, the area's outline color and thickness, and how dark the tablet is outside the area. Each has a Reset button. **Save as my theme** keeps your changes under a name. There's also a switch to turn animations off on both apps. Animations can't affect pen latency, because they run on separate threads from the pen, and the tablet app isn't in the pen's path at all.
-
-### Settings
-
-Every setting below is on the **Settings** or **Appearance** tab with its own Reset button, and in `config.toml`.
-
-| Setting | Default | Applies |
-|---|---|---|
-| `theme` | Midnight | Right away |
-| `animations` | On | Right away |
-| `color_background`, `color_panel`, `color_text`, `color_muted`, `color_accent` | From the theme | Right away |
-| `outline_color`, `outline_thickness`, `outside_dim` | From the theme | Right away |
-| `show_area_label` (size text on the tablet) | On | Right away |
-| `hold_to_edit_seconds` | 1 | Right away |
-| `edit_timeout_seconds` | 20 | Right away |
-| `close_to_tray` | On | Right away |
-| `start_minimized` | Off | Next start |
-| `open_tablet_app` (when the cable is plugged in) | On | Next connect |
-| `screen_pinning` | Off | Next connect |
-| `usb_path` (`adb` or `direct`) | `adb` | Next connect |
-
-### Direct USB
-
-Normally the pen's reports pass through `adb.exe`. **Direct USB**, on the Settings tab, reads them from the USB connection instead. In testing it was slightly faster, and steadier when the CPU was busy. See [Reading the latency numbers](#reading-the-latency-numbers). The Settings tab also shows whether the link is running at USB 2 or USB 3 speed.
-
-adb.exe still does the setup, such as installing the tablet app, and then osutab stops it while the pen is in use. Anything else using adb on this PC, such as Android Studio, loses the tablet until osutab quits. If direct USB fails, osutab says so on the Play tab and uses adb.exe until the next plug-in.
-
-### Choosing a pen area
-
-The whole tablet is about 314 x 196 mm. Mapped to a 2560 x 1600 screen, that's 8.2 px per mm, so jumps take a long arm movement and it feels slow. A smaller area feels faster:
-
-| Area width | Height at 16:10 | 1 mm of pen movement |
-|---|---|---|
-| 314 mm | 196 mm | 8.2 px |
-| 150 mm | 94 mm | 17.1 px |
-| 120 mm | 75 mm | 21.3 px |
-| 100 mm | 62.5 mm | 25.6 px |
-| 80 mm | 50 mm | 32 px |
-
-Keep the area's shape the same as your screen's. A stretched area makes the same movement go further one way than the other, and osutab warns you about it. Give your hand some room by keeping the area away from the tablet's edges.
-
-## osu! settings
-
-### osu!lazer (tested)
-
-Settings > Input:
-
-| Setting | Value | Why |
-|---|---|---|
-| High precision mouse | **Off** | When on, lazer moves its cursor by relative movement instead of the pen's position, so jumps won't land under the pen. osutab warns you if it's on. |
-| Cursor sensitivity | Doesn't matter | It only applies when High precision mouse is on. |
-| Map absolute input to window | Off | osutab already maps to the whole screen. |
-| Disable mouse buttons during gameplay | Your choice | When on, the pen tip won't hit notes, so hit with Z/X or the side button. |
-| Touch input | Off | osutab never sends touch. Turning this off stops any other touch device from adding the Touch Device mod. |
-
-Lazer's Tablet section says no tablet is detected, which is expected and happens in both output modes. Lazer has its own built-in copy of OpenTabletDriver, which only looks for real USB tablets from its built-in list and doesn't load plugins. osutab's own settings do that job: size, position, rotation, shape lock and presets. Making lazer detect a tablet would need a third-party kernel driver and an impersonated Wacom ID.
-
-### osu!stable (not tested)
-
-A starting point, in Options > Input: Raw input off, OS TabletPC support off, sensitivity 1.0.
-
-### Windows
-
-No special settings are needed. Direct mode never touches Windows Ink, so there's nothing to turn off, and "Enhance pointer precision" doesn't affect absolute positioning. In OpenTabletDriver mode, use Absolute Mode. osutab warns you if the output is set to Windows Ink.
-
-## OpenTabletDriver plugins
-
-Choose the output on the **Play** tab:
-
-| Output | Path | Use it for |
-|---|---|---|
-| **Direct** (default) | Pen > osutab > `SendInput` | The lowest latency. Filters and plugins don't apply. |
-| **OpenTabletDriver** | Pen > osutab > local socket > OpenTabletDriver > its filters > its output | OpenTabletDriver's filters and plugins. It sets the area, filters and buttons in this mode, not osutab. |
-
-osutab includes its own copy of OpenTabletDriver and a bridge plugin that presents the S Pen to it as a tablet called "osutab S Pen". It uses your normal `%LOCALAPPDATA%\OpenTabletDriver` folder, and only touches it once you choose this output. Install community plugins with OpenTabletDriver's Plugin Manager.
-
-What has been tested, using simulated pen reports:
-
-- OpenTabletDriver finds the tablet, and takes about 0.15 ms (median) from the report being sent to the cursor moving.
-- A per-report filter and a timed filter at 1000 Hz, both written for this test, load and move the cursor by the expected amount. The timed filter's median is about 0.68 ms, because it waits for its next tick.
-
-What hasn't been tested: the S Pen itself in this mode, and any community plugin. Plugins that only change position through OpenTabletDriver's filter interfaces should work. A plugin that talks to specific tablet hardware or depends on its button layout might not.
-
-## Troubleshooting
-
-| Problem | What to do |
-|---|---|
-| "Tablet not found" | Check the cable carries data, and that USB debugging is on. |
-| "Waiting for your OK on the tablet" | Tap Allow on the tablet. With no prompt, replug the cable with the tablet unlocked. Still nothing? Revoke USB debugging authorizations in Developer options, then replug. |
-| "adb not found" | Put Google's [platform-tools](https://developer.android.com/tools/releases/platform-tools) folder next to `osutab.exe`. |
-| Jumps don't land under the pen | Turn off High precision mouse in lazer, and fix any stretched area. |
-| It feels slow | Make the pen area smaller. |
-| Occasional stutters | Close the apps listed under "Before you play". |
-| The pen doesn't work on the tablet itself | osutab holds the pen while it runs. Quit osutab to give it back. |
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/pen-area.png" alt="The Pen area page"></td>
+    <td width="50%"><img src="docs/images/latency.png" alt="The Latency page with live numbers"></td>
+  </tr>
+  <tr>
+    <td align="center">Set the size and position of your pen area</td>
+    <td align="center">Live latency, by stage (simulated reports shown)</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/appearance.png" alt="The Appearance page with theme previews"></td>
+    <td width="50%"><img src="docs/images/settings-light.png" alt="The Settings page in the light theme"></td>
+  </tr>
+  <tr>
+    <td align="center">Choose a theme or make your own</td>
+    <td align="center">Light themes too</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/tablet.png" alt="The tablet showing the pen area"></td>
+    <td width="50%"><img src="docs/images/tablet-edit.png" alt="The tablet in edit mode, with corner handles"></td>
+  </tr>
+  <tr>
+    <td align="center">Your pen area, on the tablet</td>
+    <td align="center">Move and resize it with your fingers</td>
+  </tr>
+</table>
 
 ## How it works
 
-A small helper runs on the tablet through adb and reads the S Pen directly from `/dev/input`, without root. Each pen report goes over USB to the Windows program, which moves the cursor with `SendInput`. Finger and palm input is on a separate device that the helper never opens. The mapping is linear and absolute, with no smoothing or acceleration.
+```mermaid
+flowchart LR
+    A["S Pen"] --> B["Small helper<br>on the tablet"]
+    B -- "USB cable" --> C["osutab<br>on your PC"]
+    C --> D["Windows cursor"]
+    D --> E["osu!"]
+```
 
-The tablet app talks to the PC over a separate link and doesn't handle pen input, so it isn't in the pen's path.
+A small helper runs on the tablet through Android's debugging connection, so no root is needed. It reads the pen directly from the system, before Android processes it. The tablet app only draws your pen area and handles finger edits, so it isn't in the pen's path and can't slow it down.
 
-### Following the tablet's rotation
+## Compatibility
 
-With the orientation set to follow the screen, the tablet app tells the PC whenever the screen turns, and the pen's mapping changes with it. Without the app running, the rotation is only read when the tablet connects.
-
-### Reading the latency numbers
-
-"Added latency" runs from the kernel's pen event timestamp to `SendInput` returning. It's the sum of these stages:
-
-| Stage | Measured on |
+| | Status |
 |---|---|
-| Pen event to helper sending | The tablet's clock |
-| USB and adb to the PC | Both clocks, aligned using round trips, so it's only accurate to a fraction of a millisecond |
-| PC to SendInput finished | The PC's clock |
-| SendInput to cursor moved | The PC's clock, only while the precision test is on |
+| Samsung Galaxy Tab S8 Ultra with S Pen | ‚úÖ Tested |
+| osu!lazer | ‚úÖ Tested |
+| Windows 11 | ‚úÖ Tested |
+| Other Samsung tablets and S Pen devices | ‚ùì Unknown. Some values are specific to the S8 Ultra, so they may need changes. |
+| Other Android tablets with a pen | ‚ùì Unknown |
+| osu!stable | ‚ùì Unknown |
+| Other games and drawing apps | ‚ùì Unknown |
+| Windows 10 | ‚ùì Unknown |
+| OpenTabletDriver community plugins | ‚ùì Unknown |
 
-It doesn't include the S Pen's own hardware delay, the game or your display.
+If you try osutab on something else, please share how it went by opening an issue.
 
-Measured with simulated reports at 480 Hz over 20 s, three runs of each, without `SendInput`, in ms. "Busy" has every CPU core kept busy at normal priority, as a harsh stand-in for a game.
+## Getting started
 
-| | PC | Median | 99th percentile | 99.9th percentile | Worst |
-|---|---|---|---|---|---|
-| adb.exe, without the tuning below | Quiet | 0.67ñ0.74 | 1.00ñ1.09 | 1.5ñ6.5 | 12.3ñ12.7 |
-| adb.exe | Quiet | 0.54ñ0.56 | 0.84ñ0.92 | 1.5ñ7.8 | 12.3ñ14.6 |
-| Direct USB | Quiet | 0.53ñ0.54 | 0.79ñ0.83 | 1.3ñ3.8 | 12.2ñ12.4 |
-| adb.exe, without the tuning below | Busy | 0.97ñ1.49 | 20.9ñ37.5 | 29ñ53 | 33ñ63 |
-| adb.exe | Busy | 0.49ñ0.55 | 0.77ñ2.19 | 1.8ñ10.8 | 13.0ñ17.9 |
-| Direct USB | Busy | 0.38ñ0.54 | 0.66ñ0.81 | 1.4ñ2.1 | 4.4ñ12.7 |
+There are no ready-made downloads yet, so for now you'll need to build it yourself.
 
-The tuning is what osutab now does by default:
+### 1. Build it
 
-- It raises `adb.exe` to high priority, which made most of the difference on a busy PC.
-- It runs the tablet helper on the tablet's faster cores, which took about 0.13 ms off the median.
-- It stops Windows treating osutab and `adb.exe` as background work to slow down.
-
-Two things that were tried and left out, because they didn't reliably help: Windows' multimedia scheduler, and keeping threads on one group of the CPU's cores. A worst case of about 12 ms shows up on every path, and its cause hasn't been found.
-
-## Files
-
-Settings are in `%APPDATA%\osutab\config.toml`. It's plain text, so you can edit it by hand while osutab is closed. Older files keep working, and anything missing gets its default. If a line has a mistake, only that setting goes back to its default. osutab tells you which, and keeps a copy of the old file next to it as `config-problem-<number>.toml`. A latency log for each run sits next to it, and only the newest 30 are kept. The Latency tab opens that folder.
-
-## Building from source
-
-The tablet app needs Java 21, Gradle 8.11 and the Android SDK (platform 35, build-tools 35). `build.ps1` looks for them in `tools\jdk21`, `tools\gradle` and `tools\android-sdk`. Put Google's platform-tools in `tools\platform-tools`.
+You'll need [Rust](https://rustup.rs), the [.NET 10 SDK](https://dotnet.microsoft.com/download), Java 21, Gradle 8.11, the Android SDK (platform 35) and Google's [platform-tools](https://developer.android.com/tools/releases/platform-tools). Put the last four inside a `tools` folder, as the [guide](docs/GUIDE.md#building-from-source) describes.
 
 ```powershell
 rustup target add aarch64-unknown-linux-musl
-.\build.ps1
-.\target\release\osutab.exe
+.\package.ps1
 ```
 
-OpenTabletDriver mode also needs the .NET 10 SDK and OpenTabletDriver's source at commit `f3927ac` in `tools\otd-src`.
+The finished program is in `dist\osutab`.
 
-`package.ps1` builds everything and puts a copy you can move anywhere in `dist\osutab`. That folder includes Google's adb, whose terms don't allow redistributing it, so keep it for your own use rather than publishing it.
+### 2. Set up the tablet
 
-To run the tests:
+Turn on **USB debugging**. Go to Settings > About tablet > Software information and tap Build number seven times. Then go to Settings > Developer options and turn on USB debugging.
 
-```powershell
-cargo test
-```
+### 3. Connect and run
 
-## Command-line options
+1. Connect the tablet to your PC with a USB cable that carries data.
+2. Run `osutab.exe` and answer its two questions: how the tablet sits, and how big the pen area should be.
+3. On the tablet, tap **Allow** on the USB debugging prompt, and approve the osutab app if Android asks.
+4. In osu!lazer, turn off **High precision mouse** (Settings > Input > Mouse).
 
-Started from a terminal, osutab prints its messages there.
+The **Play** page checks all of this. When it says **Ready to play**, you're set.
 
-| Option | Meaning |
+## Tips for the best experience
+
+- **Close anything you don't need.** Background apps, overlays and desktop utilities can all cause occasional delays. osutab warns you about some known ones.
+- **Start with a smaller pen area.** A smaller area needs less arm movement and feels faster. Try around 100 to 120 mm wide.
+- **Match your screen's shape.** A stretched area makes movement uneven. osutab warns you and offers a fix.
+- **Use a good cable.** Some cables only charge, and those won't work at all.
+- **Try Direct USB.** It's on the Settings page, and it was the fastest and steadiest connection in testing.
+
+## How fast is it?
+
+| Measured on the test setup | Median |
 |---|---|
-| `--setup` | Shows the setup questions again. |
-| `--rotation 0\|90\|180\|270` | Overrides the saved orientation for this run. |
-| `--no-tip-click` | The pen tip doesn't click. |
-| `--button-key KEY` | Maps the side button to a letter or digit for this run. |
-| `--no-grab` | Android keeps receiving the pen too. |
-| `--no-gui` | Runs in the console with no window, and asks setup questions there. |
-| `--no-app` | Doesn't install or open the tablet app. |
-| `--tab NAME` | Opens on a tab: `play`, `area`, `latency`, `precision`, `appearance` or `settings`. |
-| `--usb-path adb\|direct` | Overrides the saved USB path for this run. |
-| `--no-tuning` | Leaves out the scheduling choices above, to measure what they do. |
-| `--cpu-burn SECONDS` | Keeps every CPU core busy, to test with a loaded PC. No tablet needed. |
-| `--duration SECONDS` | Stops automatically and prints a summary. |
-| `--dry-run` | Measures without injecting any input. |
-| `--test-mode` | Starts with the precision test on, with no time limit. |
-| `--self-test` | Moves the cursor to known positions and checks where it lands. No tablet needed. |
-| `--stall-trace DIR` | Records what happened around each latency stall of 20 ms or more. Adds watchdogs on both sides and pings every 10 ms. |
-| `--sendinput-bench SECONDS` | Times `SendInput` alone with zero-distance moves. Can run alongside a game. No tablet needed. |
-| `--burst ON_MS OFF_MS` | Sends fake pen reports in bursts, to test pauses without the pen. Use with `--dry-run`. |
-| `--ping-bench` | Measures USB round trips about 480 times a second. No pen needed. |
-| `--usb-bench SECONDS` | Measures the same round trips directly over USB, without adb.exe. Stop the adb server first. |
-| `--otd-bench SECONDS` | Sends simulated reports through OpenTabletDriver and times the cursor. This moves your cursor. |
-| `--ping-ms MS` | Sets how often to ping the tablet. |
-| `--busy-poll` | The PC program spins instead of waiting for data. In benchmarks this didn't help. |
-| `--helper-busy` | The tablet helper spins instead of waiting, using one tablet CPU core constantly. |
+| Real S Pen session | about 0.7 ms |
+| Simulated pen reports, PC idle | about 0.5 ms |
+| Simulated pen reports, all CPU cores busy | about 0.5 ms |
+
+This is the time from the tablet registering a pen event to the PC finishing the cursor move. It doesn't include the pen's own hardware, the game or your display, and your results will depend on your hardware. The S Pen itself reports about 480 times a second. The guide has [the full numbers](docs/GUIDE.md#reading-the-latency-numbers).
+
+## Good to know
+
+- While osutab runs, it holds the pen, so the pen won't work on the tablet itself. Quit osutab to give it back.
+- Android's own palm rejection is off during this time, though the tablet app still takes every touch.
+- Android doesn't let an ordinary app fully block the system bars. A swipe from the screen's edge can bring them back for a moment, and there's an optional setting to pin the app.
+- USB debugging gives a connected PC deep access to your tablet, so only allow PCs you trust.
+
+## Learn more
+
+The **[full guide](docs/GUIDE.md)** covers every setting, recommended osu! settings, OpenTabletDriver mode, troubleshooting, detailed latency numbers, command-line options and building from source.
+
+## Credits
+
+- [OpenTabletDriver](https://github.com/OpenTabletDriver/OpenTabletDriver) powers the optional plugin mode (LGPL-3.0).
+- [egui](https://github.com/emilk/egui) draws the PC interface.
+- [Geist](https://github.com/vercel/geist-font) is the typeface in both apps (SIL Open Font License, included in `assets/fonts`).
+- Google's Android platform-tools provide the connection to the tablet. They aren't included in this repository.
+
+osutab is an independent project. It isn't affiliated with or endorsed by osu!, ppy, Samsung or Google.
+
+## License
+
+osutab doesn't have a license yet, so all rights are reserved for now. The third-party parts above keep their own licenses.
