@@ -14,6 +14,7 @@ use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLO
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
 use crate::adb::DeviceState;
+use crate::keys::KeyCapture;
 use crate::lazer::{self, LazerDisplay, LazerInput};
 use crate::mapping::{Rotation, TABLET_PX_PER_MM};
 use crate::otd;
@@ -29,6 +30,7 @@ const CHECK_EVERY: Duration = Duration::from_secs(1);
 const PROCESS_CHECK_EVERY: Duration = Duration::from_secs(3);
 // Long enough to check accuracy, short enough that it can't quietly slow a whole play session.
 const PRECISION_TEST_TIME: Duration = Duration::from_secs(120);
+const KEY_CAPTURE_LIMIT: Duration = Duration::from_secs(15);
 const QUICK_WIDTHS_MM: [f64; 4] = [80.0, 100.0, 120.0, 150.0];
 
 const TAB_FADE: f32 = 0.12;
@@ -530,6 +532,7 @@ struct App {
     setup_step: u8,
     hide_at_start: bool,
     show_passed: bool,
+    key_capture: Option<(KeyCapture, Instant)>,
 }
 
 impl App {
@@ -1147,19 +1150,39 @@ impl App {
         self.orientation_picker(ui);
         let settings = self.shared.settings();
         let defaults = Settings::default();
-        let mut key = settings.button_key.clone();
         self.toggle_row(ui, "Show the area on the tablet", "", settings.show_outline, defaults.show_outline, |s, on| s.show_outline = on);
         self.toggle_row(ui, "Pen tip clicks", "", settings.tip_click, defaults.tip_click, |s, on| s.tip_click = on);
         self.setting_row(ui, "Side button key", "", |app, ui| {
-            let response = ui
-                .add(egui::TextEdit::singleline(&mut key).hint_text("None").desired_width(44.0).char_limit(1))
-                .on_hover_text("A letter or digit, such as z. Leave empty for none.");
-            if response.changed() && (key.is_empty() || crate::inject::scan_code_for_key(&key).is_some()) {
-                let key = key.to_lowercase();
-                app.shared.update_settings(|s| s.button_key = key);
-                app.changed();
+            let palette = app.palette;
+            match key_picker(ui, &settings.button_key, app.key_capture.is_some(), &palette) {
+                Some(KeyPick::Listen) => match KeyCapture::start() {
+                    Ok(capture) => app.key_capture = Some((capture, Instant::now())),
+                    Err(e) => app.message = e,
+                },
+                Some(KeyPick::Cancel) => app.key_capture = None,
+                Some(KeyPick::Clear) => app.set_button_key(String::new()),
+                None => {}
             }
         });
+    }
+
+    fn set_button_key(&mut self, key: String) {
+        self.shared.update_settings(|s| s.button_key = key);
+        self.changed();
+    }
+
+    /// Saves the key once it's pressed. Listening takes every key on the PC, so it stops as soon as
+    /// the person could be doing anything else.
+    fn follow_key_capture(&mut self, ctx: &egui::Context) {
+        let Some((capture, started)) = &self.key_capture else { return };
+        if let Some(key) = capture.poll() {
+            self.key_capture = None;
+            self.set_button_key(key);
+        } else if self.tab != Tab::Area || !ctx.input(|i| i.focused) || started.elapsed() >= KEY_CAPTURE_LIMIT {
+            self.key_capture = None;
+        } else {
+            ctx.request_repaint_after(Duration::from_millis(30));
+        }
     }
 
     /// Offers the two ways to fix a stretched area.
@@ -1632,6 +1655,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         let settings = self.shared.settings();
         self.apply_appearance(ctx, &settings);
+        self.follow_key_capture(ctx);
         let has_tray = self.shared.tray_thread.load(Ordering::SeqCst) != 0;
         let setup_done = self.shared.setup_done.load(Ordering::SeqCst);
         if ctx.input(|i| i.viewport().close_requested()) {
@@ -1705,6 +1729,33 @@ impl eframe::App for App {
 }
 
 /// A scrolling page in a centred column, with the scroll bar at the window's edge.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum KeyPick {
+    Listen,
+    Cancel,
+    Clear,
+}
+
+/// Shows the side button's key, or asks for one while listening. Drawn from the right.
+fn key_picker(ui: &mut egui::Ui, key: &str, listening: bool, palette: &Palette) -> Option<KeyPick> {
+    let mut pick = None;
+    if listening {
+        if ui.button("Cancel").clicked() {
+            pick = Some(KeyPick::Cancel);
+        }
+        ui.colored_label(palette.accent, "Press any key");
+    } else {
+        let response = ui.button(crate::keys::label(key)).on_hover_text("Click, then press the key you want.");
+        if response.clicked() {
+            pick = Some(KeyPick::Listen);
+        }
+        if !key.is_empty() && ui.add(egui::Button::new(RichText::new("Clear").color(palette.muted).small()).frame(false)).clicked() {
+            pick = Some(KeyPick::Clear);
+        }
+    }
+    pick
+}
+
 /// A big number with its unit. It has a set height, as a page that scrolls would otherwise let it
 /// fill the page.
 fn stat_value(ui: &mut egui::Ui, value: &str, unit: &str, color: Color32, muted: Color32) {
@@ -1810,6 +1861,7 @@ pub fn run(shared: Arc<Shared>, tab: Tab, exe_dir: PathBuf) -> Result<(), eframe
                 setup_step: 0,
                 hide_at_start: settings.start_minimized,
                 show_passed: false,
+                key_capture: None,
             };
             if app.shared.settings().output == Output::OpenTabletDriver {
                 app.ensure_otd_running();
@@ -1934,6 +1986,31 @@ mod tests {
         });
         assert!(on);
         assert!(changed);
+    }
+
+    #[test]
+    fn the_key_picker_does_what_was_clicked() {
+        let palette = Palette::of(&theme::built_in()[0]);
+        let rtl = egui::Layout::right_to_left(egui::Align::Min);
+        let right_end = |rect: egui::Rect| Pos2::new(rect.right() - 6.0, rect.center().y);
+        let left_end = |rect: egui::Rect| Pos2::new(rect.left() + 6.0, rect.center().y);
+        let cases: [(&str, bool, &dyn Fn(egui::Rect) -> Pos2, KeyPick); 4] = [
+            ("", false, &right_end, KeyPick::Listen),
+            ("esc", false, &right_end, KeyPick::Listen),
+            ("esc", false, &left_end, KeyPick::Clear),
+            ("esc", true, &right_end, KeyPick::Cancel),
+        ];
+        for (key, listening, position, wanted) in cases {
+            let mut got = None;
+            click_at(position, &mut |ui| {
+                ui.with_layout(rtl, |ui| {
+                    got = got.or(key_picker(ui, key, listening, &palette));
+                    ui.min_rect()
+                })
+                .inner
+            });
+            assert_eq!(got, Some(wanted), "{key} {listening}");
+        }
     }
 
     #[test]

@@ -6,7 +6,6 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::adb::DeviceState;
-use crate::inject;
 use crate::mapping::{ActiveArea, Rect, Rotation};
 use crate::otd::Relay;
 use crate::settings::{self, Output, Settings};
@@ -83,7 +82,7 @@ fn build_live(settings: &Settings, overrides: &Overrides, screen_rotation: Rotat
         rotation,
         area: settings.area().resolve(rotation),
         tip_click: overrides.tip_click.unwrap_or(settings.tip_click),
-        button_scan: overrides.button_scan.or_else(|| inject::scan_code_for_key(&settings.button_key)),
+        button_scan: overrides.button_scan.or_else(|| crate::keys::code_for_name(&settings.button_key)),
     }
 }
 

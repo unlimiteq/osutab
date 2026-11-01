@@ -23,6 +23,12 @@ Unplugging and replugging recovers by itself, and so does changing your resoluti
 - Close any apps you don't need, especially overlays, animated wallpapers and desktop utilities. In testing, closing a few background apps took the worst delay during play from 91.6 ms to 16.8 ms. The Play tab warns you about some known ones.
 - Leave the precision test off. It turns itself off after 2 minutes, and when you close the window.
 
+### The pen's side button
+
+On the Pen area tab, click the button next to **Side button key**, then press the key you want. Any key Windows can see works, including Esc, `` ` ``, the function keys, Ctrl, Shift, the arrows and the numpad. It's one key, not a combination. The key you press only sets the button, so choosing Esc won't also close something. **Clear** removes it.
+
+The Fn key on most laptops can't be chosen, because it's handled by the keyboard and Windows never sees it. Pressing Fn with another key sets whatever that pair sends, such as a function key or a volume key.
+
 ### The tablet's screen
 
 The tablet app opens by itself and shows your pen area, its size in mm and the on-screen sensitivity. If the pen goes outside the area, the cursor stays pinned to the screen's edge.
@@ -211,7 +217,7 @@ Started from a terminal, osutab prints its messages there.
 | `--setup` | Shows the setup questions again. |
 | `--rotation 0\|90\|180\|270` | Overrides the saved orientation for this run. |
 | `--no-tip-click` | The pen tip doesn't click. |
-| `--button-key KEY` | Maps the side button to a letter or digit for this run. |
+| `--button-key KEY` | Maps the side button to a key for this run, such as `z`, `esc`, `f5` or `` ` ``. |
 | `--no-grab` | Android keeps receiving the pen too. |
 | `--no-gui` | Runs in the console with no window, and asks setup questions there. |
 | `--no-app` | Doesn't install or open the tablet app. |

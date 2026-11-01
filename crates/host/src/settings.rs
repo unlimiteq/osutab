@@ -286,7 +286,7 @@ pub fn to_text(s: &Settings) -> String {
          aspect_lock = {}\n\
          tip_click = {}\n\
          show_outline = {}\n\
-         # A single letter or digit for the pen's side button. Leave empty for none.\n\
+         # The key for the pen's side button, such as z, esc, f5 or `. Leave empty for none.\n\
          button_key = {}\n\
          \n\
          # Appearance. A built-in theme, or one saved below. Colors are #rrggbb.\n\

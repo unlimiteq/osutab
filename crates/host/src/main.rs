@@ -12,6 +12,7 @@ mod engine;
 mod gui;
 mod icon;
 mod inject;
+mod keys;
 mod lazer;
 mod mapping;
 mod otd;
@@ -133,7 +134,7 @@ fn parse_args() -> Result<Config, String> {
             }
             "--button-key" => {
                 let name = value()?;
-                c.overrides.button_scan = Some(inject::scan_code_for_key(&name).ok_or(format!("unsupported key {name}"))?);
+                c.overrides.button_scan = Some(keys::code_for_name(&name).ok_or(format!("unsupported key {name}"))?);
             }
             "--tab" => {
                 let name = value()?;

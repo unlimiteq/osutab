@@ -8,6 +8,7 @@ use windows_sys::Win32::Foundation::POINT;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::*;
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 
+use crate::keys::key_fields;
 use crate::mapping::{to_absolute, Rect};
 
 // Global so the console handler can release anything held when the program is stopped.
@@ -46,19 +47,6 @@ pub fn set_cursor_position(x: i32, y: i32) {
     unsafe { SetCursorPos(x, y) };
 }
 
-/// Accepts a single letter or digit, such as `z`.
-pub fn scan_code_for_key(name: &str) -> Option<u16> {
-    let mut chars = name.chars();
-    let c = chars.next()?.to_ascii_uppercase();
-    if chars.next().is_some() || !c.is_ascii_alphanumeric() {
-        return None;
-    }
-    match unsafe { MapVirtualKeyW(c as u32, MAPVK_VK_TO_VSC) } {
-        0 => None,
-        scan => Some(scan as u16),
-    }
-}
-
 fn mouse_input(dx: i32, dy: i32, flags: u32) -> INPUT {
     INPUT {
         r#type: INPUT_MOUSE,
@@ -68,18 +56,23 @@ fn mouse_input(dx: i32, dy: i32, flags: u32) -> INPUT {
     }
 }
 
-fn key_input(scan: u16, up: bool) -> INPUT {
-    let flags = KEYEVENTF_SCANCODE | if up { KEYEVENTF_KEYUP } else { 0 };
+fn key_input(code: u16, up: bool) -> INPUT {
+    let (vk, scan, flags) = key_fields(code, up);
     INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
-            ki: KEYBDINPUT { wVk: 0, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 },
+            ki: KEYBDINPUT { wVk: vk, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 },
         },
     }
 }
 
 fn send(inputs: &[INPUT]) {
     unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
+}
+
+#[cfg(test)]
+pub fn send_key(code: u16, up: bool) {
+    send(&[key_input(code, up)]);
 }
 
 /// Sends a mouse move of zero distance. It goes through the same path as a real move, including
@@ -103,7 +96,7 @@ pub fn release_all() {
 struct ButtonEdges {
     /// Press or release the left mouse button.
     left: Option<bool>,
-    /// Press or release this scan code.
+    /// Press or release this key, by its code from `keys`.
     key: Option<(u16, bool)>,
 }
 
