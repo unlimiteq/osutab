@@ -157,10 +157,13 @@ impl Rect {
 }
 
 /// A 0..1 position on `target` to the 0..=65535 range SendInput uses across the virtual desktop.
+/// The cursor can only sit on whole pixels, so this aims at the middle of the right one. Aiming at
+/// the exact position instead could land a pixel short, because that range doesn't divide evenly
+/// into most screen widths, and Windows doesn't document how it rounds.
 pub fn to_absolute(u: f64, v: f64, target: &Rect, desktop: &Rect) -> (i32, i32) {
-    let (px, py) = target.pixel(u, v);
-    let nx = (px - desktop.left) / desktop.width * 65536.0;
-    let ny = (py - desktop.top) / desktop.height * 65536.0;
+    let (column, row) = target.pixel_index(target.pixel(u, v));
+    let nx = (column as f64 + 0.5 - desktop.left) / desktop.width * 65536.0;
+    let ny = (row as f64 + 0.5 - desktop.top) / desktop.height * 65536.0;
     (nx.clamp(0.0, 65535.0) as i32, ny.clamp(0.0, 65535.0) as i32)
 }
 
@@ -261,6 +264,49 @@ mod tests {
     }
 
     #[test]
+    fn every_pixel_is_reached_however_windows_rounds() {
+        // The two ways Windows could plausibly turn the range back into a pixel.
+        let down = |n: i32, size: f64| (n as f64 * size / 65536.0).floor() as i32;
+        let across = |n: i32, size: f64| (n as f64 * (size - 1.0) / 65535.0).round() as i32;
+        for size in [1280.0, 1366.0, 1600.0, 1920.0, 2160.0, 2560.0, 3440.0, 3840.0] {
+            let screen = Rect { left: 0.0, top: 0.0, width: size, height: size };
+            for pixel in 0..size as i32 {
+                // A position just inside the pixel, its middle, and just before the next one.
+                for fraction in [0.001, 0.5, 0.999] {
+                    let u = (pixel as f64 + fraction) / size;
+                    let (n, _) = to_absolute(u, 0.5, &screen, &screen);
+                    assert_eq!(down(n, size), pixel, "size {size} pixel {pixel} fraction {fraction}");
+                    assert!((across(n, size) - pixel).abs() <= 1, "size {size} pixel {pixel}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn a_second_monitor_lands_on_the_right_pixels() {
+        let right = Rect { left: 2560.0, top: 0.0, width: 1920.0, height: 1080.0 };
+        let left = Rect { left: -1920.0, top: 0.0, width: 1920.0, height: 1080.0 };
+        let desktop = Rect { left: 0.0, top: 0.0, width: 4480.0, height: 1600.0 };
+        let leftmost = Rect { left: -1920.0, top: 0.0, width: 4480.0, height: 1600.0 };
+        let pixel = |n: i32, d: &Rect| d.left + (n as f64 * d.width / 65536.0).floor();
+        let (x, _) = to_absolute(0.0, 0.0, &right, &desktop);
+        assert_eq!(pixel(x, &desktop), 2560.0);
+        let (x, _) = to_absolute(1.0, 1.0, &right, &desktop);
+        assert_eq!(pixel(x, &desktop), 2560.0 + 1919.0);
+        let (x, _) = to_absolute(0.5, 0.5, &left, &leftmost);
+        assert_eq!(pixel(x, &leftmost), -960.0);
+    }
+
+    #[test]
+    fn the_far_edges_stay_on_the_screen() {
+        let screen = Rect { left: 0.0, top: 0.0, width: 2560.0, height: 1600.0 };
+        let (x, y) = to_absolute(1.0, 1.0, &screen, &screen);
+        assert!(x <= 65535 && y <= 65535);
+        assert_eq!((x as f64 * 2560.0 / 65536.0).floor(), 2559.0);
+        assert_eq!((y as f64 * 1600.0 / 65536.0).floor(), 1599.0);
+    }
+
+    #[test]
     fn sensitivity_readout() {
         let screen = Rect { left: 0.0, top: 0.0, width: 2560.0, height: 1600.0 };
         let active = area(100.0, 62.5, 0.0, 0.0, 0.0).resolve(Rotation::R90);
@@ -282,9 +328,10 @@ mod tests {
     #[test]
     fn single_display_range() {
         let screen = Rect { left: 0.0, top: 0.0, width: 2560.0, height: 1600.0 };
-        assert_eq!(to_absolute(0.0, 0.0, &screen, &screen), (0, 0));
-        assert_eq!(to_absolute(1.0, 1.0, &screen, &screen), (65535, 65535));
-        assert_eq!(to_absolute(0.5, 0.5, &screen, &screen), (32768, 32768));
+        // The middles of the first, last and center pixels.
+        assert_eq!(to_absolute(0.0, 0.0, &screen, &screen), (12, 20));
+        assert_eq!(to_absolute(1.0, 1.0, &screen, &screen), (65523, 65515));
+        assert_eq!(to_absolute(0.5, 0.5, &screen, &screen), (32780, 32788));
     }
 
     #[test]
@@ -292,7 +339,7 @@ mod tests {
         // A second monitor to the left puts the primary display in the right half.
         let desktop = Rect { left: -2560.0, top: 0.0, width: 5120.0, height: 1600.0 };
         let primary = Rect { left: 0.0, top: 0.0, width: 2560.0, height: 1600.0 };
-        assert_eq!(to_absolute(0.0, 0.0, &primary, &desktop), (32768, 0));
-        assert_eq!(to_absolute(1.0, 1.0, &primary, &desktop), (65535, 65535));
+        assert_eq!(to_absolute(0.0, 0.0, &primary, &desktop), (32774, 20));
+        assert_eq!(to_absolute(1.0, 1.0, &primary, &desktop), (65529, 65515));
     }
 }
