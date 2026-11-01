@@ -9,7 +9,7 @@ use std::time::{Duration, Instant};
 
 use osutab_core::*;
 
-use crate::adb::{Adb, DeviceState};
+use crate::adb::{self, Adb, DeviceState};
 use crate::control;
 use crate::inject::{self, Injector};
 use crate::mapping::{to_unit, Rotation};
@@ -19,7 +19,7 @@ use crate::shared::{LiveConfig, Shared};
 use crate::stats::{ClockSync, Event, PrecisionSample, SampleTiming};
 use crate::trace::{Entry, Recorder};
 use crate::tuning;
-use crate::usbadb::DirectLink;
+use crate::usbadb::{self, AdbInterface, DirectLink, QuickStartError};
 
 const FORWARD_PORT: u16 = 27191;
 const HELLO_TIMEOUT: Duration = Duration::from_secs(3);
@@ -36,6 +36,9 @@ const JUMP_PX: f64 = 300.0;
 // Kept short because this wait holds up the input thread. The cursor normally moves within 0.1 ms.
 const CURSOR_WAIT: Duration = Duration::from_micros(500);
 const PIN_SETTLE: Duration = Duration::from_millis(800);
+// A tablet that was just plugged in can need a moment before its USB connection answers.
+const QUICK_START_TRIES: u32 = 8;
+const QUICK_START_RETRY: Duration = Duration::from_millis(100);
 // On direct USB the helper stops if the PC goes quiet for this long, which gives the pen back to
 // Android even if this program is killed.
 const HELPER_PING_TIMEOUT_MS: u64 = 2000;
@@ -62,6 +65,8 @@ pub struct EngineOptions {
     pub usb_path: Option<UsbPath>,
     /// Turns on the scheduling choices that help under load. Only off to measure them.
     pub tuning: bool,
+    /// Leaves the kernel's filter on the pen's position. Only on to measure it.
+    pub keep_pen_filter: bool,
 }
 
 impl EngineOptions {
@@ -81,6 +86,9 @@ impl EngineOptions {
         }
         if !self.tuning {
             args.push("--any-core".to_string());
+        }
+        if self.keep_pen_filter {
+            args.push("--keep-filter".to_string());
         }
         args.join(" ")
     }
@@ -439,21 +447,92 @@ fn run_direct_session(options: &EngineOptions, shared: &Arc<Shared>, injector: &
     }
     adb.kill_server()?;
 
-    let timeout_ms = HELPER_PING_TIMEOUT_MS.max(ping_interval(options).as_millis() as u64 * 10);
-    let args = format!("{} --ping-timeout-ms {timeout_ms}", options.helper_args());
-    let (mut link, hello) = DirectLink::start(&args, control::APP_PORT)?;
+    let (link, hello) = DirectLink::start(&direct_helper_args(options), control::APP_PORT)?;
     *had_hello = true;
+    Ok(run_direct_link(link, &hello, options, shared, injector, disconnected_at, recorder))
+}
+
+fn direct_helper_args(options: &EngineOptions) -> String {
+    let timeout_ms = HELPER_PING_TIMEOUT_MS.max(ping_interval(options).as_millis() as u64 * 10);
+    format!("{} --ping-timeout-ms {timeout_ms}", options.helper_args())
+}
+
+/// True if the tablet can be set up without adb.exe. Following the screen's rotation needs it,
+/// because the rotation has to be known before the pen starts.
+fn can_start_quickly(options: &EngineOptions, shared: &Shared) -> bool {
+    let settings = shared.settings();
+    options.usb_path.unwrap_or(settings.usb_path) == UsbPath::Direct && settings.rotation.is_some()
+}
+
+/// What the tablet should run alongside the helper, so its screen is as the settings ask.
+fn tablet_command(open_app: bool, pin: bool, unpin: bool) -> Option<String> {
+    let mut commands = Vec::new();
+    if open_app {
+        commands.push(adb::open_app_command());
+    }
+    if pin {
+        commands.push(adb::pin_app_command());
+    } else if unpin {
+        commands.push(adb::UNPIN_COMMAND.to_string());
+    }
+    (!commands.is_empty()).then(|| commands.join("; "))
+}
+
+/// Starts over USB without adb.exe.
+fn start_quickly(options: &EngineOptions, shared: &Shared, open_app: bool) -> Result<(DirectLink, Hello), QuickStartError> {
+    let mut wanted = vec![adb::helper_stamp(&options.helper)?];
+    let mut command = None;
+    let mut pin = false;
+    let mut unpin = false;
+    if let Some(apk) = &options.app {
+        wanted.push(adb::app_stamp(apk)?);
+        let settings = shared.settings();
+        let pinned = shared.pinned.load(Ordering::SeqCst);
+        pin = settings.screen_pinning && !pinned;
+        unpin = !settings.screen_pinning && pinned;
+        command = tablet_command(open_app && settings.open_tablet_app, pin, unpin);
+    }
+    let started = DirectLink::start_quick(&direct_helper_args(options), control::APP_PORT, &wanted, command.as_deref())?;
+    if pin || unpin {
+        shared.pinned.store(pin, Ordering::SeqCst);
+    }
+    Ok(started)
+}
+
+fn run_direct_link(mut link: DirectLink, hello: &Hello, options: &EngineOptions, shared: &Arc<Shared>, injector: &mut Injector, disconnected_at: &mut Option<Instant>, recorder: &mut Option<Recorder>) -> io::Result<()> {
     shared.direct_active.store(true, Ordering::SeqCst);
     shared.usb3_link.store(link.is_usb3(), Ordering::SeqCst);
-    session_started(None, shared, disconnected_at, &hello);
+    session_started(None, shared, disconnected_at, hello);
     let pinger = link.pinger();
     start_pinger(ping_interval(options), shared.clock, move |host_ns| pinger.ping(host_ns));
-    let result = pump(&mut link, &hello, injector, shared, options, recorder);
+    let result = pump(&mut link, hello, injector, shared, options, recorder);
     shared.connected.store(false, Ordering::SeqCst);
+    // Quitting while the tablet is still here, so this saves starting adb.exe just to do it.
+    if shared.stats.stop.load(Ordering::SeqCst) && shared.pinned.load(Ordering::SeqCst) && link.run_before_closing(adb::UNPIN_COMMAND).is_ok() {
+        shared.pinned.store(false, Ordering::SeqCst);
+    }
     // Closes the stream, which makes the helper exit and gives the pen back straight away.
     link.close();
     shared.direct_active.store(false, Ordering::SeqCst);
-    Ok(result)
+    result
+}
+
+/// Tidies up after a session. Returns true if the program is stopping.
+fn session_ended(shared: &Shared, injector: &mut Injector, disconnected_at: &mut Option<Instant>, outcome: io::Result<()>) -> bool {
+    injector.reset();
+    if shared.stats.stop.load(Ordering::SeqCst) {
+        return true;
+    }
+    if disconnected_at.is_none() {
+        *disconnected_at = Some(Instant::now());
+        shared.stats.event(Event::Disconnected);
+    }
+    match outcome {
+        Ok(()) => {}
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof || e.kind() == io::ErrorKind::ConnectionReset => {}
+        Err(e) => eprintln!("session ended: {e}"),
+    }
+    false
 }
 
 /// Runs until `stop` is set, reconnecting whenever the tablet goes away.
@@ -472,9 +551,9 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
     if recorder.is_some() {
         start_pc_watchdog(shared.clone());
     }
-    if let Err(e) = options.adb.start_server() {
-        eprintln!("could not start adb: {e}");
-    }
+    let mut server_started = false;
+    let mut needs_adb = false;
+    let mut quick_failures = 0;
     let mut pushed = false;
     let mut disconnected_at: Option<Instant> = None;
     let mut waiting_reported = false;
@@ -483,11 +562,73 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
     let mut opened_app = false;
     let mut direct_failed = false;
     while !stats.stop.load(Ordering::SeqCst) {
+        if !needs_adb && !direct_failed && can_start_quickly(&options, &shared) {
+            match usbadb::adb_interface() {
+                AdbInterface::Nothing => {
+                    shared.set_device_state(DeviceState::NoDevice);
+                    opened_app = false;
+                    quick_failures = 0;
+                    if !waiting_reported {
+                        println!("waiting for tablet (USB connected, debugging authorized)...");
+                        waiting_reported = true;
+                    }
+                    std::thread::sleep(DEVICE_POLL);
+                    continue;
+                }
+                AdbInterface::Other => needs_adb = true,
+                AdbInterface::Tablet => match start_quickly(&options, &shared, !opened_app) {
+                    Ok((link, hello)) => {
+                        quick_failures = 0;
+                        opened_app = true;
+                        shared.set_device_state(DeviceState::Ready);
+                        if waiting_reported {
+                            stats.event(Event::TabletVisible);
+                        }
+                        waiting_reported = false;
+                        let outcome = run_direct_link(link, &hello, &options, &shared, &mut injector, &mut disconnected_at, &mut recorder);
+                        if session_ended(&shared, &mut injector, &mut disconnected_at, outcome) {
+                            break;
+                        }
+                        continue;
+                    }
+                    Err(QuickStartError::SetupNeeded | QuickStartError::Busy) => needs_adb = true,
+                    Err(QuickStartError::Failed(e)) => {
+                        quick_failures += 1;
+                        if quick_failures < QUICK_START_TRIES {
+                            eprintln!("quick start failed, trying again: {e}");
+                            std::thread::sleep(QUICK_START_RETRY);
+                            continue;
+                        }
+                        eprintln!("quick start failed, using adb.exe: {e}");
+                        needs_adb = true;
+                    }
+                },
+            }
+        }
+        if !server_started {
+            // Noted first, because starting it takes seconds and the program could quit meanwhile.
+            if !adb::server_running() {
+                shared.adb_started_here.store(true, Ordering::SeqCst);
+            }
+            if let Err(e) = options.adb.start_server() {
+                eprintln!("could not start adb: {e}");
+            }
+            server_started = true;
+        }
         let state = options.adb.device_state();
         shared.set_device_state(state);
         if state != DeviceState::Ready {
             opened_app = false;
             direct_failed = false;
+            // Gone, so the next plug-in can skip adb.exe.
+            if needs_adb && state != DeviceState::AdbMissing && state != DeviceState::Unauthorized && state != DeviceState::Offline {
+                needs_adb = false;
+                quick_failures = 0;
+                server_started = false;
+                if shared.adb_started_here.load(Ordering::SeqCst) {
+                    let _ = options.adb.kill_server();
+                }
+            }
         }
         if state == DeviceState::AdbMissing {
             // Only worth retrying slowly: it needs someone to put adb in place.
@@ -543,19 +684,14 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
         // No answer from the helper may mean it's gone from the tablet, or is an old version.
         if !had_hello {
             pushed = false;
+        } else if wanted_path == UsbPath::Direct {
+            // It's all set up now, and the direct path has already stopped adb.exe.
+            needs_adb = false;
+            quick_failures = 0;
+            server_started = false;
         }
-        injector.reset();
-        if stats.stop.load(Ordering::SeqCst) {
+        if session_ended(&shared, &mut injector, &mut disconnected_at, outcome) {
             break;
-        }
-        if disconnected_at.is_none() {
-            disconnected_at = Some(Instant::now());
-            stats.event(Event::Disconnected);
-        }
-        match outcome {
-            Ok(()) => {}
-            Err(e) if e.kind() == io::ErrorKind::UnexpectedEof || e.kind() == io::ErrorKind::ConnectionReset => {}
-            Err(e) => eprintln!("session ended: {e}"),
         }
     }
 }

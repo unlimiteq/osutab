@@ -21,6 +21,7 @@ const ACCEPT_TIMEOUT_MS: i32 = 10_000;
 const CLOCK_MONOTONIC: i32 = 1;
 const POLLIN: i16 = 0x001;
 const EVENT_SIZE: usize = 24;
+const PEN_FILTER_FILE: &str = "/data/local/tmp/osutab-pen-filter";
 
 const EVIOCGRAB: u64 = 0x4004_4590;
 const EVIOCSCLOCK: u64 = 0x4004_45a0;
@@ -33,6 +34,9 @@ const fn eviocgkey(len: u64) -> u64 {
 }
 const fn eviocgabs(axis: u16) -> u64 {
     0x8018_4540 + axis as u64
+}
+const fn eviocsabs(axis: u16) -> u64 {
+    0x4018_45c0 + axis as u64
 }
 
 #[repr(C)]
@@ -102,6 +106,55 @@ fn abs_info(file: &File, axis: u16) -> io::Result<AbsInfo> {
         return Err(io::Error::last_os_error());
     }
     Ok(info)
+}
+
+fn set_fuzz(file: &File, axis: u16, fuzz: i32) -> io::Result<()> {
+    let mut info = abs_info(file, axis)?;
+    info.fuzz = fuzz;
+    if unsafe { ioctl(file.as_raw_fd(), eviocsabs(axis), &info as *const AbsInfo) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
+/// The kernel's "fuzz" filter ignores the smallest pen movements and averages small ones, which
+/// costs accuracy and adds lag to slow, fine movement. This turns it off while the pen is held, and
+/// puts it back after. The original goes in a file, because a killed helper can't put it back.
+struct PenFilterOff {
+    pen: File,
+    x: i32,
+    y: i32,
+}
+
+impl PenFilterOff {
+    fn new(pen: &File) -> io::Result<Option<PenFilterOff>> {
+        let saved = fs::read_to_string(PEN_FILTER_FILE).ok().and_then(|text| parse_saved_filter(&text));
+        let current = (abs_info(pen, ABS_X)?.fuzz, abs_info(pen, ABS_Y)?.fuzz);
+        let (x, y) = saved.unwrap_or(current);
+        if (x, y) == (0, 0) {
+            return Ok(None);
+        }
+        fs::write(PEN_FILTER_FILE, format!("{x} {y}"))?;
+        let off = PenFilterOff { pen: pen.try_clone()?, x, y };
+        set_fuzz(pen, ABS_X, 0)?;
+        set_fuzz(pen, ABS_Y, 0)?;
+        eprintln!("[helper] pen filter off (was {x}, {y})");
+        Ok(Some(off))
+    }
+}
+
+impl Drop for PenFilterOff {
+    fn drop(&mut self) {
+        let restored = set_fuzz(&self.pen, ABS_X, self.x).and(set_fuzz(&self.pen, ABS_Y, self.y));
+        if restored.is_ok() {
+            let _ = fs::remove_file(PEN_FILTER_FILE);
+        }
+    }
+}
+
+fn parse_saved_filter(text: &str) -> Option<(i32, i32)> {
+    let mut parts = text.split_whitespace();
+    Some((parts.next()?.parse().ok()?, parts.next()?.parse().ok()?))
 }
 
 fn read_snapshot(file: &File) -> io::Result<PenSnapshot> {
@@ -294,6 +347,15 @@ fn run() -> io::Result<()> {
             eprintln!("[helper] pen grabbed exclusively");
         }
     }
+    // Android doesn't see the pen while it's grabbed, so only osutab gets the unfiltered position.
+    let _filter_off = if grab && !args.iter().any(|a| a == "--keep-filter") {
+        PenFilterOff::new(&pen).unwrap_or_else(|e| {
+            eprintln!("[helper] could not turn off the pen filter: {e}");
+            None
+        })
+    } else {
+        None
+    };
     if watch {
         start_watchdog();
     }

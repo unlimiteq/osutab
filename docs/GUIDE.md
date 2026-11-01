@@ -72,7 +72,9 @@ Every setting below is on the **Settings** or **Appearance** tab, and in `config
 
 Normally the pen's reports pass through `adb.exe`. **Direct USB**, on the Settings tab, reads them from the USB connection instead. In testing it was slightly faster, and steadier when the CPU was busy. See [Reading the latency numbers](#reading-the-latency-numbers). The Settings tab also shows whether the link is running at USB 2 or USB 3 speed.
 
-adb.exe still does the setup, such as installing the tablet app, and then osutab stops it while the pen is in use. Anything else using adb on this PC, such as Android Studio, loses the tablet until osutab quits. If direct USB fails, osutab says so on the Play tab and uses adb.exe until the next plug-in.
+It also starts much faster, because it doesn't need `adb.exe`, which took about 5 seconds to start in testing. On the test setup the pen was ready about 0.15 s after launching, against about 5.4 s before. `adb.exe` is only used when it's needed: the first time you run a new build, because it installs what the tablet needs, and when the orientation is set to follow the screen.
+
+Anything else using adb on this PC, such as Android Studio, loses the tablet until osutab quits. If direct USB fails, osutab says so on the Play tab and uses adb.exe until the next plug-in.
 
 ### Choosing a pen area
 
@@ -146,6 +148,8 @@ What hasn't been tested: the S Pen itself in this mode, and any community plugin
 
 A small helper runs on the tablet through adb and reads the S Pen directly from `/dev/input`, without root. Each pen report goes over USB to the Windows program, which moves the cursor with `SendInput`. Finger and palm input is on a separate device that the helper never opens. The mapping is linear and absolute, with no smoothing or acceleration.
 
+Linux normally filters the pen's position a little: on the test tablet it ignored movements under 0.02 mm and averaged those up to 0.08 mm. On a small pen area that's a few screen pixels, so osutab turns the filter off while it holds the pen and puts it back when it lets go. Since the cursor can only sit on whole pixels, osutab aims at the middle of the right pixel, so rounding in Windows can't land it on the next one.
+
 The tablet app talks to the PC over a separate link and doesn't handle pen input, so it isn't in the pen's path.
 
 ### Following the tablet's rotation
@@ -182,7 +186,9 @@ The tuning is what osutab now does by default:
 - It runs the tablet helper on the tablet's faster cores, which took about 0.13 ms off the median.
 - It stops Windows treating osutab and `adb.exe` as background work to slow down.
 
-Two things that were tried and left out, because they didn't reliably help: Windows' multimedia scheduler, and keeping threads on one group of the CPU's cores. A worst case of about 12 ms shows up on every path, and its cause hasn't been found.
+Four things that were tried and left out, because they didn't reliably help: Windows' multimedia scheduler, keeping threads on one group of the CPU's cores, WinUSB's `RAW_IO` setting, and having the PC spin on the USB read instead of sleeping. In three rounds of each, the last two gave medians of 0.52–0.55 and 0.52–0.56 ms, against 0.52–0.56 ms without. That suggests little of the remaining time is on the PC, though only the PC's own stages can be measured directly. A worst case of about 12 ms shows up on every path, and its cause hasn't been found.
+
+Real pen sessions also show occasional stalls of about 20 ms as the pen starts moving, and they don't appear with simulated reports. Their cause hasn't been found either.
 
 ## Files
 
@@ -224,6 +230,7 @@ Started from a terminal, osutab prints its messages there.
 | `--tab NAME` | Opens on a tab: `play`, `area`, `latency`, `precision`, `appearance` or `settings`. |
 | `--usb-path adb\|direct` | Overrides the saved USB path for this run. |
 | `--no-tuning` | Leaves out the scheduling choices above, to measure what they do. |
+| `--keep-pen-filter` | Leaves Linux's filter on the pen's position, to measure what turning it off does. |
 | `--cpu-burn SECONDS` | Keeps every CPU core busy, to test with a loaded PC. No tablet needed. |
 | `--duration SECONDS` | Stops automatically and prints a summary. |
 | `--dry-run` | Measures without injecting any input. |

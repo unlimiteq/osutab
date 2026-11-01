@@ -44,7 +44,14 @@ const OPEN_RETRY: Duration = Duration::from_secs(3);
 const HELPER_STREAM: u32 = 1;
 const REVERSE_STREAM: u32 = 2;
 const PEN_STREAM: u32 = 3;
+const STAMPS_STREAM: u32 = 4;
+const TABLET_COMMAND_STREAM: u32 = 5;
+const LAST_COMMAND_STREAM: u32 = 6;
+const LAST_COMMAND_TIMEOUT_MS: u32 = 1000;
 const FIRST_APP_STREAM: u32 = 100;
+// Windows' errors for a file something else has open.
+const ERROR_ACCESS_DENIED_CODE: i32 = 5;
+const ERROR_SHARING_VIOLATION_CODE: i32 = 32;
 const APP_WRITE_TIMEOUT: Duration = Duration::from_millis(200);
 
 // WinUSB's generic device interface, which is how this tablet's ADB interface registers.
@@ -130,6 +137,45 @@ fn find_adb_interface() -> Option<Vec<u16>> {
     [GUID_WINUSB_DEVICE, GUID_ADB_DEVICE].iter().find_map(|guid| {
         interface_paths(guid).into_iter().find(|p| is_adb_interface(&String::from_utf16_lossy(&p[..p.len() - 1])))
     })
+}
+
+/// What's plugged in, as far as adb goes. It starts no programs, so it can be asked often.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AdbInterface {
+    /// A tablet this program can talk to directly.
+    Tablet,
+    /// Some other adb device, which needs adb.exe.
+    Other,
+    Nothing,
+}
+
+pub fn adb_interface() -> AdbInterface {
+    if find_adb_interface().is_some() {
+        return AdbInterface::Tablet;
+    }
+    let is_adb = |path: &Vec<u16>| String::from_utf16_lossy(path).to_lowercase().contains("adb");
+    if !interface_paths(&GUID_ADB_DEVICE).is_empty() || interface_paths(&GUID_WINUSB_DEVICE).iter().any(is_adb) {
+        AdbInterface::Other
+    } else {
+        AdbInterface::Nothing
+    }
+}
+
+/// Why a start without adb.exe didn't work.
+#[derive(Debug)]
+pub enum QuickStartError {
+    /// The tablet doesn't have this build's helper or app yet, which takes adb.exe to put there.
+    SetupNeeded,
+    /// Something else holds the USB interface, most likely an adb server.
+    Busy,
+    /// Possibly just a tablet that's still starting up its USB connection.
+    Failed(io::Error),
+}
+
+impl From<io::Error> for QuickStartError {
+    fn from(e: io::Error) -> Self {
+        QuickStartError::Failed(e)
+    }
 }
 
 /// The USB bulk pipes of the ADB interface. Reads and writes can run on different threads.
@@ -367,9 +413,34 @@ impl DirectLink {
     /// Connects, starts the helper, and waits for its hello.
     pub fn start(helper_args: &str, app_port: u16) -> io::Result<(DirectLink, Hello)> {
         let pipes = Arc::new(open_when_free()?);
+        Self::connected(pipes, app_port)?.start_helper(helper_args)
+    }
+
+    /// The same, for when adb.exe isn't running, which skips the seconds it takes to start. `wanted`
+    /// is what the tablet needs to have installed, and `tablet_command` runs alongside the helper,
+    /// so bringing up the tablet's screen never holds up the pen.
+    pub fn start_quick(helper_args: &str, app_port: u16, wanted: &[String], tablet_command: Option<&str>) -> Result<(DirectLink, Hello), QuickStartError> {
+        let pipes = UsbPipes::open().map_err(|e| match e.raw_os_error() {
+            Some(ERROR_ACCESS_DENIED_CODE | ERROR_SHARING_VIOLATION_CODE) => QuickStartError::Busy,
+            _ => QuickStartError::Failed(e),
+        })?;
+        let mut link = Self::connected(Arc::new(pipes), app_port)?;
+        let installed = link.shell_output(STAMPS_STREAM, &crate::adb::read_stamps_command())?;
+        if !crate::adb::stamps_match(&installed, wanted) {
+            return Err(QuickStartError::SetupNeeded);
+        }
+        if let Some(command) = tablet_command {
+            let mut service = format!("shell:{command}").into_bytes();
+            service.push(0);
+            link.pipes.send(A_OPEN, TABLET_COMMAND_STREAM, 0, &service)?;
+        }
+        Ok(link.start_helper(helper_args)?)
+    }
+
+    fn connected(pipes: Arc<UsbPipes>, app_port: u16) -> io::Result<DirectLink> {
         pipes.set_read_timeout(SETUP_TIMEOUT_MS)?;
         handshake(&pipes)?;
-        let mut link = DirectLink {
+        Ok(DirectLink {
             pipes,
             buffer: vec![0u8; READ_BUFFER],
             remote_pen: 0,
@@ -380,31 +451,52 @@ impl DirectLink {
             app_streams: Vec::new(),
             next_app_stream: FIRST_APP_STREAM,
             app_port,
-        };
+        })
+    }
+
+    fn start_helper(mut self, helper_args: &str) -> io::Result<(DirectLink, Hello)> {
         let helper = crate::adb::REMOTE_HELPER;
-        link.open(HELPER_STREAM, &format!("shell:pkill -x osutab-helper; exec {helper} {helper_args}"))?;
-        link.open(REVERSE_STREAM, &format!("reverse:forward:tcp:{app_port};tcp:{app_port}"))?;
+        self.open(HELPER_STREAM, &format!("shell:pkill -x osutab-helper; exec {helper} {helper_args}"))?;
+        let app_port = self.app_port;
+        self.open(REVERSE_STREAM, &format!("reverse:forward:tcp:{app_port};tcp:{app_port}"))?;
 
         // The helper needs a moment before its socket exists.
         let start = Instant::now();
-        link.remote_pen = loop {
-            match link.open(PEN_STREAM, &format!("localabstract:{}", osutab_core::SOCKET_NAME)) {
+        self.remote_pen = loop {
+            match self.open(PEN_STREAM, &format!("localabstract:{}", osutab_core::SOCKET_NAME)) {
                 Ok(id) => break id,
                 Err(e) if e.kind() == io::ErrorKind::ConnectionRefused && start.elapsed() < OPEN_RETRY => {
-                    std::thread::sleep(Duration::from_millis(30));
+                    std::thread::sleep(Duration::from_millis(5));
                 }
                 Err(e) => return Err(e),
             }
         };
 
         let mut frame = [0u8; DOWN_FRAME_LEN];
-        link.next_frame(&mut frame)?;
+        self.next_frame(&mut frame)?;
         let hello = match DownFrame::decode(&frame) {
             Some(DownFrame::Hello(h)) if h.version == PROTOCOL_VERSION => h,
             _ => return Err(io::Error::other("unexpected first frame from helper")),
         };
-        link.pipes.set_read_timeout(0)?;
-        Ok((link, hello))
+        self.pipes.set_read_timeout(0)?;
+        Ok((self, hello))
+    }
+
+    /// Runs a short command on the tablet and returns what it printed.
+    fn shell_output(&mut self, local: u32, command: &str) -> io::Result<String> {
+        self.open(local, &format!("shell:{command}"))?;
+        let mut output = Vec::new();
+        loop {
+            let (header, len) = read_message(&self.pipes, &mut self.buffer)?;
+            match header.command {
+                A_WRTE if header.arg1 == local => {
+                    output.extend_from_slice(&self.buffer[..len]);
+                    self.pipes.send(A_OKAY, local, header.arg0, &[])?;
+                }
+                A_CLSE if header.arg1 == local => return Ok(String::from_utf8_lossy(&output).into_owned()),
+                _ => self.handle_other(header, len)?,
+            }
+        }
     }
 
     pub fn is_usb3(&self) -> bool {
@@ -533,6 +625,12 @@ impl DirectLink {
             let _ = pipes.send(A_CLSE, local, remote, &[]);
         });
         Ok(())
+    }
+
+    /// Runs one last command on the tablet before closing, and waits for it to finish.
+    pub fn run_before_closing(&mut self, command: &str) -> io::Result<()> {
+        self.pipes.set_read_timeout(LAST_COMMAND_TIMEOUT_MS)?;
+        self.shell_output(LAST_COMMAND_STREAM, command).map(|_| ())
     }
 
     /// Says goodbye, so the helper exits and Android gets the pen back straight away.

@@ -1645,7 +1645,7 @@ impl App {
                 }
             });
             divider(ui);
-            hint(ui, "Direct USB skips adb.exe. In testing it was slightly faster than adb.exe, and steadier when the CPU was busy. It stops adb.exe while osutab runs, so anything else using adb on this PC, such as Android Studio, loses the tablet. Applies the next time the tablet connects.", &palette);
+            hint(ui, "Direct USB skips adb.exe. In testing it started in a fraction of a second instead of about 5 seconds, was slightly faster than adb.exe, and was steadier when the CPU was busy. It stops adb.exe while osutab runs, so anything else using adb on this PC, such as Android Studio, loses the tablet. Applies the next time the tablet connects.", &palette);
         });
     }
 

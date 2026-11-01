@@ -137,7 +137,7 @@ The **Play** page checks all of this. When it says **Ready to play**, you're set
 - **Start with a smaller pen area.** A smaller area needs less arm movement and feels faster.
 - **Match your screen's shape.** A stretched area makes movement uneven. osutab lets you know, but if that's what you prefer, ignore the warning.
 - **Use a good cable.** Some cables only charge, and those won't work at all.
-- **Try Direct USB.** It's on the Settings page, and it was the fastest and steadiest connection in testing.
+- **Try Direct USB.** It's on the Settings page. It was the fastest and steadiest connection in testing, and it starts in a fraction of a second instead of about 5 seconds.
 
 ## How fast is it?
 

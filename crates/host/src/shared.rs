@@ -47,6 +47,8 @@ pub struct Shared {
     pub window: AtomicIsize,
     /// The tray thread's id while its icon exists. Closing the window hides it only then.
     pub tray_thread: AtomicU32,
+    /// True if this program started the adb server, so it should stop it when it quits.
+    pub adb_started_here: AtomicBool,
     /// True while the pen is coming over direct USB rather than through adb.exe.
     pub direct_active: AtomicBool,
     /// Whether the direct USB link is running at USB 3 speed.
@@ -109,6 +111,7 @@ impl Shared {
             setup_done: AtomicBool::new(setup_done),
             window: AtomicIsize::new(0),
             tray_thread: AtomicU32::new(0),
+            adb_started_here: AtomicBool::new(false),
             direct_active: AtomicBool::new(false),
             usb3_link: AtomicBool::new(false),
             pinned: AtomicBool::new(false),

@@ -49,7 +49,6 @@ use shared::{Overrides, Shared};
 // Lets the console handler reach the stop flag.
 static SHARED: AtomicPtr<Shared> = AtomicPtr::new(std::ptr::null_mut());
 const KEPT_LOGS: usize = 30;
-const ADB_SERVER_PORT: u16 = 5037;
 const DISPLAY_CHECK: Duration = Duration::from_secs(1);
 // How long quitting waits for the direct USB link to say goodbye, so the pen comes straight back.
 const DIRECT_CLOSE_WAIT: Duration = Duration::from_millis(400);
@@ -77,6 +76,7 @@ struct Config {
     usb_bench: Option<u64>,
     usb_path: Option<UsbPath>,
     no_tuning: bool,
+    keep_pen_filter: bool,
     cpu_burn: Option<u64>,
     tab: gui::Tab,
 }
@@ -84,7 +84,7 @@ struct Config {
 const USAGE: &str = "osutab [--setup] [--no-gui] [--no-app] [--self-test] [--test-mode] [--busy-poll] [--helper-busy] [--ping-bench]
        [--stall-trace DIR] [--ping-ms MS] [--burst ON_MS OFF_MS] [--sendinput-bench SECONDS] [--tab NAME]
        [--rotation 0|90|180|270] [--duration SECONDS] [--no-tip-click] [--button-key KEY]
-       [--no-grab] [--dry-run] [--adb PATH] [--helper PATH] [--usb-path adb|direct] [--no-tuning] [--cpu-burn SECONDS]";
+       [--no-grab] [--dry-run] [--adb PATH] [--helper PATH] [--usb-path adb|direct] [--no-tuning] [--keep-pen-filter] [--cpu-burn SECONDS]";
 
 fn parse_args() -> Result<Config, String> {
     let mut c = Config {
@@ -110,6 +110,7 @@ fn parse_args() -> Result<Config, String> {
         usb_bench: None,
         usb_path: None,
         no_tuning: false,
+        keep_pen_filter: false,
         cpu_burn: None,
         tab: gui::Tab::Play,
     };
@@ -161,6 +162,7 @@ fn parse_args() -> Result<Config, String> {
                 c.usb_path = Some(UsbPath::parse(&name).ok_or(format!("unknown USB path {name}"))?);
             }
             "--no-tuning" => c.no_tuning = true,
+            "--keep-pen-filter" => c.keep_pen_filter = true,
             "--cpu-burn" => c.cpu_burn = Some(value()?.parse().map_err(|_| "invalid --cpu-burn".to_string())?),
             "--stall-trace" => c.stall_trace = Some(value()?.into()),
             "--ping-ms" => c.ping_ms = Some(value()?.parse().map_err(|_| "invalid --ping-ms".to_string())?),
@@ -314,12 +316,6 @@ fn fatal(message: &str) -> ! {
     std::process::exit(2);
 }
 
-/// Whether an adb server is listening on its standard port.
-fn adb_server_running() -> bool {
-    let address = std::net::SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, ADB_SERVER_PORT));
-    std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok()
-}
-
 /// True if this is the only running copy. Two copies would fight over the tablet and the pen.
 fn is_first_instance() -> bool {
     let name = wide("Local\\osutab-single-instance");
@@ -372,8 +368,6 @@ fn main() {
     let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
     let adb = Adb::new(find_adb(&config, &exe_dir));
     let adb_at_exit = adb.clone();
-    // A server that was already running belongs to something else, so it stays running at exit.
-    let adb_server_was_running = adb_server_running();
     let Some(helper) = find_helper(&config, &exe_dir, &data_dir) else {
         fatal("The tablet helper is missing from this build. Run build.ps1 to rebuild osutab.");
     };
@@ -409,6 +403,7 @@ fn main() {
         burst: config.burst,
         usb_path: config.usb_path,
         tuning: !config.no_tuning,
+        keep_pen_filter: config.keep_pen_filter,
     };
     if !config.no_tuning {
         tuning::apply_to_this_program();
@@ -471,10 +466,12 @@ fn main() {
             while shared.direct_active.load(Ordering::SeqCst) && closing.elapsed() < DIRECT_CLOSE_WAIT {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            if shared.pinned.load(Ordering::SeqCst) {
+            // Normally done already. Otherwise it needs adb.exe, and the tablet to still be here.
+            if shared.pinned.load(Ordering::SeqCst) && usbadb::adb_interface() != usbadb::AdbInterface::Nothing {
                 let _ = adb_at_exit.unpin_app();
             }
-            if !adb_server_was_running {
+            // A server that was already running belongs to something else, so it stays running.
+            if shared.adb_started_here.load(Ordering::SeqCst) {
                 let _ = adb_at_exit.kill_server();
             }
             if let Some(mut daemon) = shared.otd_daemon.lock().unwrap().take() {
