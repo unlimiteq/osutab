@@ -10,6 +10,7 @@ mod assets;
 mod control;
 mod engine;
 mod gui;
+mod icon;
 mod inject;
 mod lazer;
 mod mapping;
@@ -22,6 +23,7 @@ mod stats;
 mod theme;
 mod trace;
 mod tray;
+mod tuning;
 mod usbadb;
 
 use std::fs::{self, File};
@@ -72,13 +74,15 @@ struct Config {
     otd_bench: Option<u64>,
     usb_bench: Option<u64>,
     usb_path: Option<UsbPath>,
+    no_tuning: bool,
+    cpu_burn: Option<u64>,
     tab: gui::Tab,
 }
 
 const USAGE: &str = "osutab [--setup] [--no-gui] [--no-app] [--self-test] [--test-mode] [--busy-poll] [--helper-busy] [--ping-bench]
        [--stall-trace DIR] [--ping-ms MS] [--burst ON_MS OFF_MS] [--sendinput-bench SECONDS] [--tab NAME]
        [--rotation 0|90|180|270] [--duration SECONDS] [--no-tip-click] [--button-key KEY]
-       [--no-grab] [--dry-run] [--adb PATH] [--helper PATH] [--usb-path adb|direct]";
+       [--no-grab] [--dry-run] [--adb PATH] [--helper PATH] [--usb-path adb|direct] [--no-tuning] [--cpu-burn SECONDS]";
 
 fn parse_args() -> Result<Config, String> {
     let mut c = Config {
@@ -103,6 +107,8 @@ fn parse_args() -> Result<Config, String> {
         otd_bench: None,
         usb_bench: None,
         usb_path: None,
+        no_tuning: false,
+        cpu_burn: None,
         tab: gui::Tab::Play,
     };
     let mut args = std::env::args().skip(1);
@@ -152,6 +158,8 @@ fn parse_args() -> Result<Config, String> {
                 let name = value()?;
                 c.usb_path = Some(UsbPath::parse(&name).ok_or(format!("unknown USB path {name}"))?);
             }
+            "--no-tuning" => c.no_tuning = true,
+            "--cpu-burn" => c.cpu_burn = Some(value()?.parse().map_err(|_| "invalid --cpu-burn".to_string())?),
             "--stall-trace" => c.stall_trace = Some(value()?.into()),
             "--ping-ms" => c.ping_ms = Some(value()?.parse().map_err(|_| "invalid --ping-ms".to_string())?),
             "--burst" => {
@@ -321,6 +329,10 @@ fn main() {
     unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     let target = inject::primary_display();
 
+    if let Some(seconds) = config.cpu_burn {
+        tuning::cpu_burn(seconds);
+        return;
+    }
     if config.self_test {
         std::process::exit(if selftest::run(target) { 0 } else { 1 });
     }
@@ -386,7 +398,11 @@ fn main() {
         ping_ms: config.ping_ms,
         burst: config.burst,
         usb_path: config.usb_path,
+        tuning: !config.no_tuning,
     };
+    if !config.no_tuning {
+        tuning::apply_to_this_program();
+    }
     if options.app.is_none() && !config.no_app {
         println!("tablet app not found; run build.ps1 to build it");
     }
