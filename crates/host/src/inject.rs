@@ -70,11 +70,6 @@ fn send(inputs: &[INPUT]) {
     unsafe { SendInput(inputs.len() as u32, inputs.as_ptr(), size_of::<INPUT>() as i32) };
 }
 
-#[cfg(test)]
-pub fn send_key(code: u16, up: bool) {
-    send(&[key_input(code, up)]);
-}
-
 /// Sends a mouse move of zero distance. It goes through the same path as a real move, including
 /// any global mouse hooks, without moving the cursor.
 pub fn send_zero_move() {

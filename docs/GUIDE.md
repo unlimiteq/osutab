@@ -25,7 +25,7 @@ Unplugging and replugging recovers by itself, and so does changing your resoluti
 
 ### The pen's side button
 
-On the Pen area tab, click the button next to **Side button key**, then press the key you want. Any key Windows can see works, including Esc, `` ` ``, the function keys, Ctrl, Shift, the arrows and the numpad. It's one key, not a combination. The key you press only sets the button, so choosing Esc won't also close something. **Clear** removes it.
+On the Pen area tab, click the button next to **Side button key**, then press the key you want. Any key Windows can see works, including Esc, `` ` ``, the function keys, Ctrl, Shift, the arrows and the numpad. It's one key, not a combination. Inside osutab the key you press only sets the button, but Windows still reacts to a few keys, so Caps Lock will still switch and the Windows key will still open Start. **Clear** removes it.
 
 The Fn key on most laptops can't be chosen, because it's handled by the keyboard and Windows never sees it. Pressing Fn with another key sets whatever that pair sends, such as a function key or a volume key.
 

@@ -12,6 +12,7 @@ use eframe::egui::{self, Color32, FontFamily, Pos2, RichText, Stroke, Vec2};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
+use winit::platform::windows::EventLoopBuilderExtWindows;
 
 use crate::adb::DeviceState;
 use crate::keys::KeyCapture;
@@ -1155,10 +1156,7 @@ impl App {
         self.setting_row(ui, "Side button key", "", |app, ui| {
             let palette = app.palette;
             match key_picker(ui, &settings.button_key, app.key_capture.is_some(), &palette) {
-                Some(KeyPick::Listen) => match KeyCapture::start() {
-                    Ok(capture) => app.key_capture = Some((capture, Instant::now())),
-                    Err(e) => app.message = e,
-                },
+                Some(KeyPick::Listen) => app.key_capture = Some((KeyCapture::start(), Instant::now())),
                 Some(KeyPick::Cancel) => app.key_capture = None,
                 Some(KeyPick::Clear) => app.set_button_key(String::new()),
                 None => {}
@@ -1171,15 +1169,24 @@ impl App {
         self.changed();
     }
 
-    /// Saves the key once it's pressed. Listening takes every key on the PC, so it stops as soon as
-    /// the person could be doing anything else.
+    /// Saves the key once it's pressed. Otherwise, a window that's no longer in front won't get one.
     fn follow_key_capture(&mut self, ctx: &egui::Context) {
         let Some((capture, started)) = &self.key_capture else { return };
+        let elapsed = started.elapsed();
+        let window = self.shared.window.load(Ordering::SeqCst);
+        let in_front = window == 0 || unsafe { GetForegroundWindow() } as isize == window;
         if let Some(key) = capture.poll() {
             self.key_capture = None;
+            self.message.clear();
             self.set_button_key(key);
-        } else if self.tab != Tab::Area || !ctx.input(|i| i.focused) || started.elapsed() >= KEY_CAPTURE_LIMIT {
+        } else if self.tab != Tab::Area {
             self.key_capture = None;
+        } else if !in_front {
+            self.key_capture = None;
+            self.message = "Stopped listening for a key, because osutab's window is no longer in front.".to_string();
+        } else if elapsed >= KEY_CAPTURE_LIMIT {
+            self.key_capture = None;
+            self.message = "No key was pressed in time, so the side button didn't change.".to_string();
         } else {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
@@ -1821,6 +1828,9 @@ pub fn run(shared: Arc<Shared>, tab: Tab, exe_dir: PathBuf) -> Result<(), eframe
             .with_title(WINDOW_TITLE)
             .with_icon(egui::IconData { rgba: tray::icon_rgba(ICON_SIZE), width: ICON_SIZE, height: ICON_SIZE }),
         vsync: true,
+        event_loop_builder: Some(Box::new(|builder| {
+            builder.with_msg_hook(crate::keys::on_window_message);
+        })),
         ..Default::default()
     };
     eframe::run_native(
