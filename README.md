@@ -73,6 +73,8 @@ It reads the pen directly on the tablet, sends each report over the USB cable an
 
 ## How it works
 
+<div style="pointer-events: none; overflow: hidden; width: 100%; display: block;">
+
 ```mermaid
 flowchart LR
     A["S Pen"] --> B["Small helper<br>on the tablet"]
@@ -80,6 +82,8 @@ flowchart LR
     C --> D["Windows cursor"]
     D --> E["osu!"]
 ```
+
+</div>
 
 A small helper runs on the tablet through Android's debugging connection, so no root is needed. It reads the pen directly from the system, before Android processes it. The tablet app only draws your pen area and handles finger edits, so it isn't in the pen's path and can't slow it down.
 
@@ -101,7 +105,7 @@ If you try osutab on something else, please share how it went by opening an issu
 
 ## Getting started
 
-There are no ready-made downloads yet, so for now you'll need to build it yourself.
+The [Releases](https://github.com/unlimiteq/osutab/releases) page has `osutab.exe`, which needs Google's [platform-tools](https://developer.android.com/tools/releases/platform-tools) folder beside it. OpenTabletDriver mode needs a full build, described below.
 
 ### 1. Build it
 
@@ -130,8 +134,8 @@ The **Play** page checks all of this. When it says **Ready to play**, you're set
 ## Tips for the best experience
 
 - **Close anything you don't need.** Background apps, overlays and desktop utilities can all cause occasional delays. osutab warns you about some known ones.
-- **Start with a smaller pen area.** A smaller area needs less arm movement and feels faster. Try around 100 to 120 mm wide.
-- **Match your screen's shape.** A stretched area makes movement uneven. osutab warns you and offers a fix.
+- **Start with a smaller pen area.** A smaller area needs less arm movement and feels faster.
+- **Match your screen's shape.** A stretched area makes movement uneven. osutab lets you know, but if that's what you prefer, ignore the warning.
 - **Use a good cable.** Some cables only charge, and those won't work at all.
 - **Try Direct USB.** It's on the Settings page, and it was the fastest and steadiest connection in testing.
 
