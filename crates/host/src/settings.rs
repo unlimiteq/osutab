@@ -512,6 +512,8 @@ pub fn parse(text: &str) -> Parsed {
     let mut legacy = Legacy { area: full_area(), found: false };
     let mut section = Section::Top;
 
+    // Some editors, PowerShell among them, start a UTF-8 file with an invisible byte order mark.
+    let text = text.strip_prefix('\u{feff}').unwrap_or(text);
     for (index, raw) in text.lines().enumerate() {
         let line = raw.trim();
         let number = index + 1;
@@ -823,6 +825,13 @@ mod tests {
         move_data_folder(&old, &new);
         assert_eq!(std::fs::read_to_string(new.join("config.toml")).unwrap(), "theme = Candy\n");
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    #[test]
+    fn a_byte_order_mark_at_the_start_is_ignored() {
+        let parsed = parse("\u{feff}# osu!tab settings\ntip_click = false\n");
+        assert_eq!(parsed.problems, Vec::<String>::new());
+        assert!(!parsed.settings.tip_click);
     }
 
     #[test]

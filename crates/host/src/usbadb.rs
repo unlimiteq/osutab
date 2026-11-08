@@ -108,10 +108,13 @@ impl Header {
     }
 }
 
-/// True for the path of the tablet's ADB interface.
-pub fn is_adb_interface(path: &str) -> bool {
+/// True for the path of a Samsung tablet's ADB interface. `android_interface` says whether Windows
+/// listed it as an Android device interface. adbd asks Windows for that itself, so on a PC without
+/// Samsung's driver, that's how its ADB interface shows up, with nothing else in its name. Samsung's
+/// driver also names the interface "adb" in its path.
+pub fn is_adb_interface(path: &str, android_interface: bool) -> bool {
     let path = path.to_lowercase();
-    path.contains("vid_04e8") && path.contains("adb")
+    path.contains("vid_04e8") && (android_interface || path.contains("adb"))
 }
 
 fn interface_paths(guid: &GUID) -> Vec<Vec<u16>> {
@@ -149,8 +152,8 @@ fn interface_paths(guid: &GUID) -> Vec<Vec<u16>> {
 }
 
 fn find_adb_interface() -> Option<Vec<u16>> {
-    [GUID_WINUSB_DEVICE, GUID_ADB_DEVICE].iter().find_map(|guid| {
-        interface_paths(guid).into_iter().find(|p| is_adb_interface(&String::from_utf16_lossy(&p[..p.len() - 1])))
+    [(GUID_ADB_DEVICE, true), (GUID_WINUSB_DEVICE, false)].iter().find_map(|(guid, android_interface)| {
+        interface_paths(guid).into_iter().find(|p| is_adb_interface(&String::from_utf16_lossy(&p[..p.len() - 1]), *android_interface))
     })
 }
 
@@ -945,9 +948,17 @@ mod tests {
 
     #[test]
     fn recognises_this_tablets_real_interface_path() {
+        // With Samsung's driver, as on the test PC.
         let real = r"\\?\usb#vid_04e8&pid_6860&adb#7&3073af68&0&0003#{dee824ef-729b-4a0e-9c14-b7117d33a817}";
-        assert!(is_adb_interface(real));
+        assert!(is_adb_interface(real, false));
         let camera = r"\\?\usb#vid_174f&pid_246f&mi_02#7&2c27ee68&1&0002#{dee824ef-729b-4a0e-9c14-b7117d33a817}";
-        assert!(!is_adb_interface(camera));
+        assert!(!is_adb_interface(camera, false));
+        // Without it, Windows' own driver names the interface by its number. Only the Android device
+        // interface list says it's the ADB one.
+        let generic = r"\\?\usb#vid_04e8&pid_6860&mi_02#7&3073af68&0&0002#{f72fe0d4-cbcb-407d-8814-9ed673d0dd6b}";
+        assert!(is_adb_interface(generic, true));
+        assert!(!is_adb_interface(generic, false), "a Samsung interface in the general list could be anything");
+        let other_phone = r"\\?\usb#vid_18d1&pid_4ee7&mi_01#7&1a2b3c4d&0&0001#{f72fe0d4-cbcb-407d-8814-9ed673d0dd6b}";
+        assert!(!is_adb_interface(other_phone, true));
     }
 }

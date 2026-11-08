@@ -659,6 +659,7 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
                             continue;
                         }
                         Err(QuickStartError::Unauthorized) => {
+                            eprintln!("quick start: waiting for the tablet's \"Allow USB debugging?\" prompt");
                             // The prompt is up, or was turned down. Asking again shows it again.
                             shared.set_device_state(DeviceState::Unauthorized);
                             quick_since = None;
@@ -677,6 +678,7 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
                                 QuickStartError::Unauthorized | QuickStartError::SetupFailed(_) => unreachable!(),
                             };
                             if started.elapsed() < patience {
+                                eprintln!("quick start didn't work yet, trying again: {what}");
                                 std::thread::sleep(QUICK_START_RETRY);
                                 continue;
                             }
