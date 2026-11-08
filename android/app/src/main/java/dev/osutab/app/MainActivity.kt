@@ -72,6 +72,7 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         hideSystemBars()
+        askForFullScreen()
         link = Link().also { it.start() }
     }
 
@@ -83,7 +84,10 @@ class MainActivity : Activity() {
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        if (hasFocus) hideSystemBars()
+        if (hasFocus) {
+            hideSystemBars()
+            askForFullScreen()
+        }
     }
 
     override fun onTopResumedActivityChanged(isTopResumed: Boolean) {
@@ -93,19 +97,25 @@ class MainActivity : Activity() {
 
     override fun onMultiWindowModeChanged(isInMultiWindowMode: Boolean, newConfig: Configuration) {
         super.onMultiWindowModeChanged(isInMultiWindowMode, newConfig)
-        view.floating = isInMultiWindowMode
+        askForFullScreen()
     }
 
     /**
      * The area only lines up with the pen at full screen, but a tablet in its desktop mode opens
-     * apps in a floating window. If Android says no, the view asks the user instead.
+     * apps in a floating window. Android only grants this to the app on top, and on a first open
+     * it can say no before the window has settled, so it's asked again at each chance. If Android
+     * keeps saying no, the view asks the user instead.
      */
     private fun askForFullScreen() {
         view.floating = isInMultiWindowMode
         if (isInMultiWindowMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
             requestFullscreenMode(FULLSCREEN_MODE_REQUEST_ENTER, null)
+            main.removeCallbacks(retryFullScreen)
+            main.postDelayed(retryFullScreen, FULLSCREEN_RETRY_MS)
         }
     }
+
+    private val retryFullScreen = Runnable { if (isInMultiWindowMode) askForFullScreen() }
 
     private fun hideSystemBars() {
         window.setDecorFitsSystemWindows(false)
@@ -273,6 +283,7 @@ class MainActivity : Activity() {
         const val CONNECT_TIMEOUT_MS = 1000
         const val DISCONNECT_GRACE_MS = 1500L
         const val REHIDE_MS = 150L
+        const val FULLSCREEN_RETRY_MS = 400L
         const val SAVED_THEME = "theme"
     }
 }

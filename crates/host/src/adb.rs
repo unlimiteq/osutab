@@ -16,6 +16,8 @@ pub const REMOTE_HELPER: &str = "/data/local/tmp/osutab-helper";
 const HELPER_STAMP: &str = "/data/local/tmp/osutab-helper.stamp";
 const APP_STAMP: &str = "/data/local/tmp/osutab-app.stamp";
 const APP_PACKAGE: &str = "dev.osutab.app";
+// Android's WINDOWING_MODE_FULLSCREEN.
+const FULLSCREEN_WINDOWING_MODE: u32 = 1;
 // Pinning needs the app already showing, which takes a moment after starting it.
 const PIN_SETTLE_SECONDS: &str = "0.8";
 // Keeps each adb call from flashing a console window.
@@ -57,7 +59,13 @@ pub fn stamps_match(installed: &str, wanted: &[String]) -> bool {
 /// The tablet command that brings up the app. If the app has gone, it forgets the app's stamp, so
 /// the next start installs it again.
 pub fn open_app_command() -> String {
-    format!("am start -n {APP_PACKAGE}/.MainActivity 2>&1 | grep -q Error && rm -f {APP_STAMP}")
+    format!("{} 2>&1 | grep -q Error && rm -f {APP_STAMP}", start_app_command())
+}
+
+/// Starts the app full screen. A tablet in its desktop mode would otherwise open it in a floating
+/// window, where the area it draws doesn't line up with the pen.
+fn start_app_command() -> String {
+    format!("am start --windowingMode {FULLSCREEN_WINDOWING_MODE} -n {APP_PACKAGE}/.MainActivity")
 }
 
 /// The tablet command that pins the app once it's showing, for the same job as `Adb::pin_app`.
@@ -167,7 +175,7 @@ impl Adb {
     }
 
     pub fn start_app(&self) -> io::Result<()> {
-        self.output(&["shell", &format!("am start -n {APP_PACKAGE}/.MainActivity")]).map(|_| ())
+        self.output(&["shell", &start_app_command()]).map(|_| ())
     }
 
     /// Pins the tablet app, which blocks Home and Back. Android allows this from adb's shell.
