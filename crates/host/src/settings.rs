@@ -132,7 +132,7 @@ impl Default for Settings {
             start_minimized: false,
             open_tablet_app: true,
             screen_pinning: false,
-            usb_path: UsbPath::Adb,
+            usb_path: UsbPath::Direct,
         }
     }
 }
@@ -855,7 +855,8 @@ mod tests {
         assert_eq!(s.button_key, "z");
         assert_eq!(s.theme, DEFAULT_THEME);
         assert!(s.animations);
-        assert_eq!(s.usb_path, UsbPath::Adb);
+        // Direct USB has been the default since it stopped needing adb.exe at all.
+        assert_eq!(s.usb_path, UsbPath::Direct);
     }
 
     #[test]

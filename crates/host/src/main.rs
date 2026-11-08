@@ -6,6 +6,7 @@
 #![cfg_attr(not(test), windows_subsystem = "windows")]
 
 mod adb;
+mod adbkey;
 mod assets;
 mod control;
 mod engine;
@@ -77,6 +78,7 @@ struct Config {
     usb_path: Option<UsbPath>,
     no_tuning: bool,
     keep_pen_filter: bool,
+    test_drops: Option<Duration>,
     cpu_burn: Option<u64>,
     tab: gui::Tab,
 }
@@ -84,7 +86,7 @@ struct Config {
 const USAGE: &str = "osutab [--setup] [--no-gui] [--no-app] [--self-test] [--test-mode] [--busy-poll] [--helper-busy] [--ping-bench]
        [--stall-trace DIR] [--ping-ms MS] [--burst ON_MS OFF_MS] [--sendinput-bench SECONDS] [--tab NAME]
        [--rotation 0|90|180|270] [--duration SECONDS] [--no-tip-click] [--button-key KEY]
-       [--no-grab] [--dry-run] [--adb PATH] [--helper PATH] [--usb-path adb|direct] [--no-tuning] [--keep-pen-filter] [--cpu-burn SECONDS]";
+       [--no-grab] [--dry-run] [--adb PATH] [--helper PATH] [--usb-path adb|direct] [--no-tuning] [--keep-pen-filter] [--test-drops SECONDS] [--cpu-burn SECONDS]";
 
 fn parse_args() -> Result<Config, String> {
     let mut c = Config {
@@ -111,6 +113,7 @@ fn parse_args() -> Result<Config, String> {
         usb_path: None,
         no_tuning: false,
         keep_pen_filter: false,
+        test_drops: None,
         cpu_burn: None,
         tab: gui::Tab::Play,
     };
@@ -163,6 +166,7 @@ fn parse_args() -> Result<Config, String> {
             }
             "--no-tuning" => c.no_tuning = true,
             "--keep-pen-filter" => c.keep_pen_filter = true,
+            "--test-drops" => c.test_drops = Some(Duration::from_secs(value()?.parse().map_err(|_| "invalid --test-drops".to_string())?)),
             "--cpu-burn" => c.cpu_burn = Some(value()?.parse().map_err(|_| "invalid --cpu-burn".to_string())?),
             "--stall-trace" => c.stall_trace = Some(value()?.into()),
             "--ping-ms" => c.ping_ms = Some(value()?.parse().map_err(|_| "invalid --ping-ms".to_string())?),
@@ -316,6 +320,25 @@ fn fatal(message: &str) -> ! {
     std::process::exit(2);
 }
 
+/// Unpins the tablet app after the session that pinned it has already ended, such as after a drop.
+/// This used to start adb.exe and leave it running, and the next start then found the tablet taken.
+fn unpin_at_exit(shared: &Shared, adb: &Adb) {
+    match usbadb::adb_interface() {
+        usbadb::AdbInterface::Nothing => {}
+        usbadb::AdbInterface::Tablet
+            if adbkey::key_dir()
+                .and_then(|dir| adbkey::load_or_create(&dir).ok())
+                .is_some_and(|key| usbadb::DirectLink::run_once(&key, adb::UNPIN_COMMAND).is_ok()) => {}
+        _ => {
+            // Stopped again straight after, below, unless it was already running for something else.
+            if !adb::server_running() {
+                shared.adb_started_here.store(true, Ordering::SeqCst);
+            }
+            let _ = adb.unpin_app();
+        }
+    }
+}
+
 /// True if this is the only running copy. Two copies would fight over the tablet and the pen.
 fn is_first_instance() -> bool {
     let name = wide("Local\\osutab-single-instance");
@@ -404,6 +427,7 @@ fn main() {
         usb_path: config.usb_path,
         tuning: !config.no_tuning,
         keep_pen_filter: config.keep_pen_filter,
+        test_drops: config.test_drops,
     };
     if !config.no_tuning {
         tuning::apply_to_this_program();
@@ -466,9 +490,9 @@ fn main() {
             while shared.direct_active.load(Ordering::SeqCst) && closing.elapsed() < DIRECT_CLOSE_WAIT {
                 std::thread::sleep(Duration::from_millis(10));
             }
-            // Normally done already. Otherwise it needs adb.exe, and the tablet to still be here.
-            if shared.pinned.load(Ordering::SeqCst) && usbadb::adb_interface() != usbadb::AdbInterface::Nothing {
-                let _ = adb_at_exit.unpin_app();
+            // Normally done already, by the session as it closed.
+            if shared.pinned.load(Ordering::SeqCst) {
+                unpin_at_exit(&shared, &adb_at_exit);
             }
             // A server that was already running belongs to something else, so it stays running.
             if shared.adb_started_here.load(Ordering::SeqCst) {

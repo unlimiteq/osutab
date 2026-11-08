@@ -79,15 +79,17 @@ impl Dist {
 
 // Fields are only read through Debug when the event is printed.
 #[allow(dead_code)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub enum Event {
     TipDown,
     TipUp,
     ButtonDown { in_contact: bool },
     ButtonUp { in_contact: bool },
     Connected { recovery: Option<Duration> },
-    Disconnected,
+    Disconnected { why: String },
     TabletVisible,
+    /// Anything else worth finding in the log later, such as why a reconnect was slow.
+    Note(String),
 }
 
 pub fn wall_clock() -> String {

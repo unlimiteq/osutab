@@ -51,6 +51,36 @@ pub fn read_stamps_command() -> String {
     format!("cat {HELPER_STAMP} {APP_STAMP} 2>/dev/null")
 }
 
+/// The tablet command that notes what's now installed: the helper's stamp, then the app's if any.
+pub fn write_stamps_command(stamps: &[String]) -> String {
+    let mut command = format!("echo {} > {HELPER_STAMP}", stamps.first().map_or("", String::as_str));
+    if let Some(app) = stamps.get(1) {
+        command.push_str(&format!(" && echo {app} > {APP_STAMP}"));
+    }
+    command
+}
+
+/// Stops an adb server that's holding the tablet, the way `adb kill-server` does, without needing
+/// adb.exe. Returns false if there wasn't one to stop.
+pub fn stop_server() -> bool {
+    use std::io::{Read, Write};
+    let address = (Ipv4Addr::LOCALHOST, 5037).into();
+    let Ok(mut server) = TcpStream::connect_timeout(&address, Duration::from_millis(200)) else { return false };
+    let _ = server.set_read_timeout(Some(Duration::from_secs(2)));
+    let request = "host:kill";
+    if server.write_all(format!("{:04x}{request}", request.len()).as_bytes()).is_err() {
+        return false;
+    }
+    let mut answer = [0u8; 4];
+    let _ = server.read_exact(&mut answer);
+    // The server lets go of the USB interface as it exits, which takes a moment.
+    let gone = std::time::Instant::now();
+    while server_running() && gone.elapsed() < Duration::from_secs(2) {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    true
+}
+
 /// True if every stamp wanted is in what the tablet said.
 pub fn stamps_match(installed: &str, wanted: &[String]) -> bool {
     wanted.iter().all(|stamp| installed.lines().any(|line| line.trim() == stamp))
@@ -224,7 +254,7 @@ fn parse_app_task(dump: &str) -> Option<u32> {
     digits.parse().ok()
 }
 
-fn parse_rotation(dump: &str) -> Option<Rotation> {
+pub fn parse_rotation(dump: &str) -> Option<Rotation> {
     let line = dump.lines().find(|l| l.contains("Viewport INTERNAL"))?;
     let rest = &line[line.find("orientation=")? + "orientation=".len()..];
     let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
@@ -241,6 +271,14 @@ mod tests {
         assert!(command.contains("Task{.*dev.osutab.app"), "{command}");
         assert!(command.contains(r"s/^[^#]*#([0-9]+).*/\1/"), "{command}");
         assert!(command.ends_with("cmd activity task lock $task"), "{command}");
+    }
+
+    #[test]
+    fn stamps_are_written_where_they_are_read() {
+        let command = write_stamps_command(&["helper-abc".to_string(), "100-200".to_string()]);
+        assert_eq!(command, format!("echo helper-abc > {HELPER_STAMP} && echo 100-200 > {APP_STAMP}"));
+        assert!(read_stamps_command().contains(HELPER_STAMP) && read_stamps_command().contains(APP_STAMP));
+        assert_eq!(write_stamps_command(&["helper-abc".to_string()]), format!("echo helper-abc > {HELPER_STAMP}"));
     }
 
     #[test]

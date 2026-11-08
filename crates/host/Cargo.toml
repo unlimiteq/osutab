@@ -12,7 +12,7 @@ path = "src/main.rs"
 osutab-core = { path = "../core" }
 eframe = { version = "0.31", default-features = false, features = ["glow", "default_fonts"] }
 raw-window-handle = "0.6"
-rsa = "0.9"
+rsa = { version = "0.9", features = ["getrandom"] }
 serde_json = "1"
 sha1 = { version = "0.10", features = ["oid"] }
 tray-icon = "0.20"

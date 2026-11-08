@@ -43,6 +43,29 @@ pub fn cursor_position() -> (i32, i32) {
     (p.x, p.y)
 }
 
+/// The file name of the program in front, for the log.
+pub fn foreground_program() -> String {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
+    unsafe {
+        let mut pid = 0u32;
+        GetWindowThreadProcessId(GetForegroundWindow(), &mut pid);
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
+        if process.is_null() {
+            return format!("process {pid}");
+        }
+        let mut name = [0u16; 260];
+        let mut len = name.len() as u32;
+        let ok = QueryFullProcessImageNameW(process, 0, name.as_mut_ptr(), &mut len);
+        CloseHandle(process);
+        if ok == 0 {
+            return format!("process {pid}");
+        }
+        let path = String::from_utf16_lossy(&name[..len as usize]);
+        path.rsplit('\\').next().unwrap_or(&path).to_string()
+    }
+}
+
 pub fn set_cursor_position(x: i32, y: i32) {
     unsafe { SetCursorPos(x, y) };
 }

@@ -11,7 +11,6 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use rsa::pkcs8::DecodePrivateKey;
 use rsa::{Pkcs1v15Sign, RsaPrivateKey};
 use sha1::Sha1;
 use windows_sys::core::GUID;
@@ -21,6 +20,9 @@ use windows_sys::Win32::Foundation::*;
 use windows_sys::Win32::Storage::FileSystem::*;
 
 use osutab_core::{DownFrame, Hello, UpFrame, DOWN_FRAME_LEN, PROTOCOL_VERSION};
+
+use crate::adbkey::AdbKey;
+use crate::mapping::Rotation;
 
 const A_CNXN: u32 = 0x4e58_4e43;
 const A_AUTH: u32 = 0x4854_5541;
@@ -36,8 +38,18 @@ const AUTH_SIGNATURE: u32 = 2;
 const AUTH_RSAPUBLICKEY: u32 = 3;
 const HEADER_LEN: usize = 24;
 const READ_BUFFER: usize = 64 * 1024;
-// WinUSB's policy number for how long a transfer may wait, from winusbio.h.
+// WinUSB's policy numbers, from winusbio.h.
+const AUTO_CLEAR_STALL: u32 = 0x02;
 const PIPE_TRANSFER_TIMEOUT: u32 = 0x03;
+// Windows' error for a read that ran out of time.
+const ERROR_SEM_TIMEOUT_CODE: i32 = 121;
+// How often to check back while the tablet shows its "Allow USB debugging?" prompt, and how long
+// to keep it up before asking again.
+const PROMPT_POLL_MS: u32 = 500;
+const PROMPT_LIMIT: Duration = Duration::from_secs(60);
+// The largest piece of a file in one message of adb's file transfer protocol.
+const SYNC_DATA_MAX: usize = 64 * 1024;
+const TEMP_APK: &str = "/data/local/tmp/osutab-install.apk";
 // Until the helper answers, a silent tablet shouldn't block forever.
 const SETUP_TIMEOUT_MS: u32 = 3000;
 const OPEN_RETRY: Duration = Duration::from_secs(3);
@@ -47,6 +59,9 @@ const PEN_STREAM: u32 = 3;
 const STAMPS_STREAM: u32 = 4;
 const TABLET_COMMAND_STREAM: u32 = 5;
 const LAST_COMMAND_STREAM: u32 = 6;
+const SYNC_STREAM: u32 = 7;
+const SETUP_STREAM: u32 = 8;
+const STOP_HELPER_STREAM: u32 = 9;
 const LAST_COMMAND_TIMEOUT_MS: u32 = 1000;
 const FIRST_APP_STREAM: u32 = 100;
 // Windows' errors for a file something else has open.
@@ -164,18 +179,47 @@ pub fn adb_interface() -> AdbInterface {
 /// Why a start without adb.exe didn't work.
 #[derive(Debug)]
 pub enum QuickStartError {
-    /// The tablet doesn't have this build's helper or app yet, which takes adb.exe to put there.
-    SetupNeeded,
+    /// Putting this build's helper or app on the tablet failed.
+    SetupFailed(io::Error),
     /// Something else holds the USB interface, most likely an adb server.
     Busy,
+    /// The tablet is showing its "Allow USB debugging?" prompt, or it was turned down.
+    Unauthorized,
     /// Possibly just a tablet that's still starting up its USB connection.
     Failed(io::Error),
 }
 
 impl From<io::Error> for QuickStartError {
     fn from(e: io::Error) -> Self {
-        QuickStartError::Failed(e)
+        if e.kind() == io::ErrorKind::PermissionDenied {
+            QuickStartError::Unauthorized
+        } else {
+            QuickStartError::Failed(e)
+        }
     }
+}
+
+/// Everything a start without adb.exe needs.
+pub struct QuickStart<'a> {
+    pub helper_args: &'a str,
+    pub app_port: u16,
+    /// This build's helper and app, put on the tablet if what's there differs.
+    pub helper: &'a std::path::Path,
+    pub app: Option<&'a std::path::Path>,
+    pub stamps: &'a [String],
+    /// Runs alongside the helper, so bringing up the tablet's screen never holds up the pen.
+    pub tablet_command: Option<&'a str>,
+    /// Asks the tablet which way its screen faces, for when the pen follows it.
+    pub read_rotation: bool,
+}
+
+/// What a start without adb.exe found along the way.
+pub struct QuickStarted {
+    pub link: DirectLink,
+    pub hello: Hello,
+    pub rotation: Option<Rotation>,
+    /// True if the tablet needed this build's helper or app, and got it.
+    pub set_up: bool,
 }
 
 /// The USB bulk pipes of the ADB interface. Reads and writes can run on different threads.
@@ -232,6 +276,13 @@ impl UsbPipes {
             if pipes.pipe_in == 0 || pipes.pipe_out == 0 {
                 return Err(io::Error::other("the ADB interface has no bulk pipes"));
             }
+            // A transfer error leaves a pipe halted, and WinUSB keeps it that way until someone resets
+            // it, so every later read fails. That's how a single error used to end every quick
+            // reconnect. Resetting both also puts the two sides' packet counters back in step.
+            WinUsb_ResetPipe(winusb, pipes.pipe_in);
+            WinUsb_ResetPipe(winusb, pipes.pipe_out);
+            let on: u8 = 1;
+            WinUsb_SetPipePolicy(winusb, pipes.pipe_in, AUTO_CLEAR_STALL, 1, &on as *const u8 as *const _);
             Ok(pipes)
         }
     }
@@ -296,40 +347,48 @@ fn read_message(pipes: &UsbPipes, buffer: &mut [u8]) -> io::Result<(Header, usiz
     Ok((header, filled))
 }
 
-/// Signs the tablet's challenge with the key adb.exe made and the tablet already trusts.
-pub fn sign_token(key_pem: &str, token: &[u8]) -> Result<Vec<u8>, String> {
-    let key = RsaPrivateKey::from_pkcs8_pem(key_pem).map_err(|e| e.to_string())?;
+/// Signs the tablet's challenge with the key the tablet trusts.
+pub fn sign_token(key: &RsaPrivateKey, token: &[u8]) -> Result<Vec<u8>, String> {
     // adbd hands us the digest itself, so this signs it as-is, labelled as SHA-1.
     key.sign(Pkcs1v15Sign::new::<Sha1>(), token).map_err(|e| e.to_string())
 }
 
-fn android_key_dir() -> Option<std::path::PathBuf> {
-    Some(std::path::PathBuf::from(std::env::var_os("USERPROFILE")?).join(".android"))
-}
-
-/// Does the connect and authorize handshake.
-pub fn handshake(pipes: &UsbPipes) -> io::Result<()> {
-    let dir = android_key_dir().ok_or_else(|| io::Error::other("no user profile folder"))?;
-    let key = std::fs::read_to_string(dir.join("adbkey"))?;
+/// Does the connect and authorize handshake, and returns the largest message the tablet takes. A
+/// tablet that doesn't know this PC's key shows its "Allow USB debugging?" prompt, and while it
+/// does, `waiting` is called every half second to say so and to ask whether to keep waiting.
+pub fn handshake(pipes: &UsbPipes, key: &AdbKey, waiting: &mut dyn FnMut() -> bool) -> io::Result<u32> {
     let mut buffer = vec![0u8; READ_BUFFER];
     pipes.send(A_CNXN, A_VERSION, MAX_PAYLOAD, b"host::\0")?;
     let mut sent_signature = false;
+    let mut offered: Option<Instant> = None;
     loop {
-        let (header, len) = read_message(pipes, &mut buffer)?;
-        match header.command {
-            A_CNXN => return Ok(()),
-            A_AUTH if header.arg0 == AUTH_TOKEN && !sent_signature => {
-                let signature = sign_token(&key, &buffer[..len]).map_err(io::Error::other)?;
-                pipes.send(A_AUTH, AUTH_SIGNATURE, 0, &signature)?;
-                sent_signature = true;
+        match read_message(pipes, &mut buffer) {
+            Ok((header, len)) => match header.command {
+                A_CNXN => {
+                    pipes.set_read_timeout(SETUP_TIMEOUT_MS)?;
+                    return Ok(header.arg1.clamp(4096, MAX_PAYLOAD));
+                }
+                A_AUTH if header.arg0 == AUTH_TOKEN && !sent_signature => {
+                    let signature = sign_token(&key.private, &buffer[..len]).map_err(io::Error::other)?;
+                    pipes.send(A_AUTH, AUTH_SIGNATURE, 0, &signature)?;
+                    sent_signature = true;
+                }
+                A_AUTH if header.arg0 == AUTH_TOKEN && offered.is_none() => {
+                    // The tablet doesn't know this key, so offer it, which shows the Allow prompt.
+                    let mut public = key.public_line.clone().into_bytes();
+                    public.push(0);
+                    pipes.send(A_AUTH, AUTH_RSAPUBLICKEY, 0, &public)?;
+                    pipes.set_read_timeout(PROMPT_POLL_MS)?;
+                    offered = Some(Instant::now());
+                }
+                _ => {}
+            },
+            Err(e) if e.raw_os_error() == Some(ERROR_SEM_TIMEOUT_CODE) && offered.is_some() => {
+                if offered.is_some_and(|t| t.elapsed() >= PROMPT_LIMIT) || !waiting() {
+                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the tablet hasn't allowed this PC yet"));
+                }
             }
-            A_AUTH if header.arg0 == AUTH_TOKEN => {
-                // The tablet doesn't know this key, so offer it, which shows the Allow prompt.
-                let mut public = std::fs::read(dir.join("adbkey.pub"))?;
-                public.push(0);
-                pipes.send(A_AUTH, AUTH_RSAPUBLICKEY, 0, &public)?;
-            }
-            _ => {}
+            Err(e) => return Err(e),
         }
     }
 }
@@ -373,6 +432,8 @@ pub struct DirectLink {
     app_streams: Vec<AppStream>,
     next_app_stream: u32,
     app_port: u16,
+    /// The largest message the tablet takes.
+    max_payload: u32,
 }
 
 /// Sends pings from another thread.
@@ -411,35 +472,44 @@ fn open_when_free() -> io::Result<UsbPipes> {
 
 impl DirectLink {
     /// Connects, starts the helper, and waits for its hello.
-    pub fn start(helper_args: &str, app_port: u16) -> io::Result<(DirectLink, Hello)> {
+    pub fn start(key: &AdbKey, helper_args: &str, app_port: u16) -> io::Result<(DirectLink, Hello)> {
         let pipes = Arc::new(open_when_free()?);
-        Self::connected(pipes, app_port)?.start_helper(helper_args)
+        Self::connected(pipes, app_port, key, &mut || false)?.start_helper(helper_args)
     }
 
-    /// The same, for when adb.exe isn't running, which skips the seconds it takes to start. `wanted`
-    /// is what the tablet needs to have installed, and `tablet_command` runs alongside the helper,
-    /// so bringing up the tablet's screen never holds up the pen.
-    pub fn start_quick(helper_args: &str, app_port: u16, wanted: &[String], tablet_command: Option<&str>) -> Result<(DirectLink, Hello), QuickStartError> {
+    /// The same without adb.exe, which skips the seconds it takes to start. Anything the tablet is
+    /// missing goes there over this connection first.
+    pub fn start_quick(plan: &QuickStart, key: &AdbKey, waiting: &mut dyn FnMut() -> bool) -> Result<QuickStarted, QuickStartError> {
         let pipes = UsbPipes::open().map_err(|e| match e.raw_os_error() {
             Some(ERROR_ACCESS_DENIED_CODE | ERROR_SHARING_VIOLATION_CODE) => QuickStartError::Busy,
             _ => QuickStartError::Failed(e),
         })?;
-        let mut link = Self::connected(Arc::new(pipes), app_port)?;
+        let mut link = Self::connected(Arc::new(pipes), plan.app_port, key, waiting)?;
         let installed = link.shell_output(STAMPS_STREAM, &crate::adb::read_stamps_command())?;
-        if !crate::adb::stamps_match(&installed, wanted) {
-            return Err(QuickStartError::SetupNeeded);
+        let set_up = !crate::adb::stamps_match(&installed, plan.stamps);
+        if set_up {
+            link.set_up(plan).map_err(QuickStartError::SetupFailed)?;
         }
-        if let Some(command) = tablet_command {
+        let rotation = if plan.read_rotation { link.display_rotation() } else { None };
+        if let Some(command) = plan.tablet_command {
             let mut service = format!("shell:{command}").into_bytes();
             service.push(0);
             link.pipes.send(A_OPEN, TABLET_COMMAND_STREAM, 0, &service)?;
         }
-        Ok(link.start_helper(helper_args)?)
+        let (link, hello) = link.start_helper(plan.helper_args)?;
+        Ok(QuickStarted { link, hello, rotation, set_up })
     }
 
-    fn connected(pipes: Arc<UsbPipes>, app_port: u16) -> io::Result<DirectLink> {
+    /// Runs one command on the tablet without starting anything else, for when no session is open.
+    pub fn run_once(key: &AdbKey, command: &str) -> io::Result<String> {
+        let pipes = Arc::new(UsbPipes::open()?);
+        let mut link = Self::connected(pipes, 0, key, &mut || false)?;
+        link.shell_output(LAST_COMMAND_STREAM, command)
+    }
+
+    fn connected(pipes: Arc<UsbPipes>, app_port: u16, key: &AdbKey, waiting: &mut dyn FnMut() -> bool) -> io::Result<DirectLink> {
         pipes.set_read_timeout(SETUP_TIMEOUT_MS)?;
-        handshake(&pipes)?;
+        let max_payload = handshake(&pipes, key, waiting)?;
         Ok(DirectLink {
             pipes,
             buffer: vec![0u8; READ_BUFFER],
@@ -451,9 +521,12 @@ impl DirectLink {
             app_streams: Vec::new(),
             next_app_stream: FIRST_APP_STREAM,
             app_port,
+            max_payload,
         })
     }
 
+    /// Starts the helper. Any other copy is stopped first: after a drop, the old one can wait
+    /// several seconds for this PC before it gives up, and it holds the socket until then.
     fn start_helper(mut self, helper_args: &str) -> io::Result<(DirectLink, Hello)> {
         let helper = crate::adb::REMOTE_HELPER;
         self.open(HELPER_STREAM, &format!("shell:pkill -x osutab-helper; exec {helper} {helper_args}"))?;
@@ -482,6 +555,103 @@ impl DirectLink {
         Ok((self, hello))
     }
 
+    /// Puts this build's helper and app on the tablet, then notes what's there.
+    fn set_up(&mut self, plan: &QuickStart) -> io::Result<()> {
+        let helper = crate::adb::REMOTE_HELPER;
+        // Written beside the old one and moved over it, because a running program's file can't be
+        // overwritten.
+        let new_helper = format!("{helper}.new");
+        self.push(&new_helper, 0o100755, &std::fs::read(plan.helper)?)?;
+        self.shell_output(SETUP_STREAM, &format!("mv -f {new_helper} {helper} && chmod 755 {helper}"))?;
+        if let Some(apk) = plan.app {
+            self.push(TEMP_APK, 0o100644, &std::fs::read(apk)?)?;
+            // -r keeps the app's data, and -d allows going back to an older build.
+            let said = self.shell_output(SETUP_STREAM, &format!("pm install -r -d {TEMP_APK} 2>&1; rm -f {TEMP_APK}"))?;
+            if !said.contains("Success") {
+                return Err(io::Error::other(format!("installing the tablet app failed: {}", said.trim())));
+            }
+        }
+        self.shell_output(SETUP_STREAM, &crate::adb::write_stamps_command(plan.stamps))?;
+        Ok(())
+    }
+
+    /// Copies a file to the tablet with adb's file transfer protocol.
+    fn push(&mut self, path: &str, mode: u32, data: &[u8]) -> io::Result<()> {
+        let remote = self.open(SYNC_STREAM, "sync:")?;
+        let spec = format!("{path},{mode}");
+        let mut request = Vec::with_capacity(data.len() + data.len() / SYNC_DATA_MAX * 8 + 64);
+        request.extend_from_slice(b"SEND");
+        request.extend_from_slice(&(spec.len() as u32).to_le_bytes());
+        request.extend_from_slice(spec.as_bytes());
+        for chunk in data.chunks(SYNC_DATA_MAX) {
+            request.extend_from_slice(b"DATA");
+            request.extend_from_slice(&(chunk.len() as u32).to_le_bytes());
+            request.extend_from_slice(chunk);
+        }
+        let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as u32);
+        request.extend_from_slice(b"DONE");
+        request.extend_from_slice(&now.to_le_bytes());
+        let mut reply = Vec::new();
+        self.write_stream(SYNC_STREAM, remote, &request, &mut reply)?;
+        while reply.len() < 8 {
+            self.read_stream(SYNC_STREAM, &mut reply)?;
+        }
+        let result = if &reply[..4] == b"OKAY" {
+            Ok(())
+        } else {
+            let length = u32::from_le_bytes([reply[4], reply[5], reply[6], reply[7]]) as usize;
+            while reply.len() < 8 + length {
+                self.read_stream(SYNC_STREAM, &mut reply)?;
+            }
+            Err(io::Error::other(format!("copying {path} to the tablet failed: {}", String::from_utf8_lossy(&reply[8..8 + length]))))
+        };
+        let _ = self.write_stream(SYNC_STREAM, remote, b"QUIT\0\0\0\0", &mut reply);
+        let _ = self.pipes.send(A_CLSE, SYNC_STREAM, remote, &[]);
+        result
+    }
+
+    /// Sends bytes on a stream, a message at a time, each waiting for the tablet's go-ahead. Anything
+    /// the tablet sends on the same stream meanwhile goes into `reply`.
+    fn write_stream(&mut self, local: u32, remote: u32, data: &[u8], reply: &mut Vec<u8>) -> io::Result<()> {
+        for chunk in data.chunks(self.max_payload as usize) {
+            self.pipes.send(A_WRTE, local, remote, chunk)?;
+            loop {
+                let (header, len) = read_message(&self.pipes, &mut self.buffer)?;
+                match header.command {
+                    A_OKAY if header.arg1 == local => break,
+                    A_WRTE if header.arg1 == local => {
+                        reply.extend_from_slice(&self.buffer[..len]);
+                        self.pipes.send(A_OKAY, local, header.arg0, &[])?;
+                    }
+                    A_CLSE if header.arg1 == local => return Err(io::ErrorKind::UnexpectedEof.into()),
+                    _ => self.handle_other(header, len)?,
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Waits for the tablet's next message on a stream, and adds what it says to `into`.
+    fn read_stream(&mut self, local: u32, into: &mut Vec<u8>) -> io::Result<()> {
+        loop {
+            let (header, len) = read_message(&self.pipes, &mut self.buffer)?;
+            match header.command {
+                A_WRTE if header.arg1 == local => {
+                    into.extend_from_slice(&self.buffer[..len]);
+                    return self.pipes.send(A_OKAY, local, header.arg0, &[]);
+                }
+                A_CLSE if header.arg1 == local => return Err(io::ErrorKind::UnexpectedEof.into()),
+                _ => self.handle_other(header, len)?,
+            }
+        }
+    }
+
+    /// Which way the tablet's screen faces.
+    fn display_rotation(&mut self) -> Option<Rotation> {
+        let dump = self.shell_output(SETUP_STREAM, "dumpsys input | grep -m1 'Viewport INTERNAL'").ok()?;
+        crate::adb::parse_rotation(&dump)
+    }
+
     /// Runs a short command on the tablet and returns what it printed.
     fn shell_output(&mut self, local: u32, command: &str) -> io::Result<String> {
         self.open(local, &format!("shell:{command}"))?;
@@ -501,6 +671,16 @@ impl DirectLink {
 
     pub fn is_usb3(&self) -> bool {
         self.pipes.usb3
+    }
+
+    /// For testing recovery: stops the helper on the tablet, as a crash there would.
+    pub fn helper_stopper(&self) -> impl Fn() -> io::Result<()> + Send + 'static {
+        let pipes = self.pipes.clone();
+        move || {
+            let mut service = b"shell:pkill -9 -x osutab-helper".to_vec();
+            service.push(0);
+            pipes.send(A_OPEN, STOP_HELPER_STREAM, 0, &service)
+        }
     }
 
     pub fn pinger(&self) -> DirectPinger {
@@ -658,7 +838,8 @@ pub fn bench(seconds: u64) -> io::Result<()> {
     const PERIOD: Duration = Duration::from_micros(2080);
 
     let pipes = Arc::new(UsbPipes::open()?);
-    handshake(&pipes)?;
+    let key = crate::adbkey::load_or_create(&crate::adbkey::key_dir().ok_or_else(|| io::Error::other("no user profile folder"))?)?;
+    handshake(&pipes, &key, &mut || false)?;
     println!("connected to the tablet directly over USB");
     let mut buffer = vec![0u8; READ_BUFFER];
     open_stream(&pipes, HELPER_STREAM, "shell:pkill -x osutab-helper; exec /data/local/tmp/osutab-helper --no-grab", &mut buffer)?;
