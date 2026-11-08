@@ -8,9 +8,9 @@ namespace OsutabBridge
     /// <summary>
     /// Connects the S Pen to OpenTabletDriver. OpenTabletDriver only discovers device hubs in its
     /// own assembly, so this tool adds ours when the daemon starts it. Enable it once in
-    /// OpenTabletDriver's Tools tab, or let osutab's installer do that.
+    /// OpenTabletDriver's Tools tab, or let osu!tab's installer do that.
     /// </summary>
-    [PluginName("osutab bridge")]
+    [PluginName("osu!tab bridge")]
     public class OsutabBridgeTool : ITool
     {
         // The daemon rebuilds its tools each time settings change, but the hub must stay the same
@@ -26,12 +26,12 @@ namespace OsutabBridge
             var property = Driver.GetType().GetProperty("CompositeDeviceHub");
             if (property?.GetValue(Driver) is not ICompositeDeviceHub composite)
             {
-                Log.Write("osutab", "This version of OpenTabletDriver has no device hub to connect to.", LogLevel.Error);
+                Log.Write("osu!tab", "This version of OpenTabletDriver has no device hub to connect to.", LogLevel.Error);
                 return false;
             }
             composite.ConnectDeviceHub(Hub);
             Hub.AnnounceDevice();
-            Log.Write("osutab", "S Pen bridge connected.");
+            Log.Write("osu!tab", "S Pen bridge connected.");
             return true;
         }
 

@@ -106,5 +106,5 @@ fn main() {
         println!("cargo:rustc-cfg=embedded_bridge");
         println!("cargo:rustc-env=OSUTAB_BRIDGE_PATH={}", bridge.canonicalize().unwrap().display());
     }
-    println!("cargo:rerun-if-changed={}", root.join("otd-plugin/osutab S Pen.json").display());
+    println!("cargo:rerun-if-changed={}", root.join("otd-plugin/osu!tab S Pen.json").display());
 }

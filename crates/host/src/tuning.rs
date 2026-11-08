@@ -32,6 +32,11 @@ pub fn apply_to_this_program() {
 }
 
 fn adb_server_ids() -> Vec<u32> {
+    process_ids("adb.exe")
+}
+
+/// Every running process with this file name.
+pub fn process_ids(name: &str) -> Vec<u32> {
     let mut ids = Vec::new();
     unsafe {
         let snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
@@ -43,7 +48,7 @@ fn adb_server_ids() -> Vec<u32> {
         let mut more = Process32FirstW(snapshot, &mut entry) != 0;
         while more {
             let len = entry.szExeFile.iter().position(|c| *c == 0).unwrap_or(entry.szExeFile.len());
-            if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case("adb.exe") {
+            if String::from_utf16_lossy(&entry.szExeFile[..len]).eq_ignore_ascii_case(name) {
                 ids.push(entry.th32ProcessID);
             }
             more = Process32NextW(snapshot, &mut entry) != 0;

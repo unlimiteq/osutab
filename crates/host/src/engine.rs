@@ -340,7 +340,9 @@ fn pump<L: PenLink>(link: &mut L, hello: &Hello, injector: &mut Injector, shared
                 }
                 let host_ms = (clock.elapsed() - now).as_secs_f32() * 1e3;
                 if host_ms >= SLOW_CURSOR_MS {
-                    stats.event(Event::Note(format!("Windows held up the cursor for {host_ms:.0} ms, with {} in front", inject::foreground_program())));
+                    let program = inject::foreground_program();
+                    stats.event(Event::Note(format!("Windows held up the cursor for {host_ms:.0} ms, with {program} in front")));
+                    *shared.last_freeze.lock().unwrap() = Some((Instant::now(), host_ms, program));
                 }
 
                 let cursor_ms = if testing && s.flags & FLAG_IN_RANGE != 0 {

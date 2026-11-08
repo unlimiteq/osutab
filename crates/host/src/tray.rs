@@ -18,8 +18,8 @@ pub use crate::icon::ring_rgba as icon_rgba;
 pub fn start(shared: Arc<Shared>) {
     std::thread::spawn(move || {
         const SIZE: u32 = 32;
-        let show = MenuItem::new("Show osutab", true, None);
-        let quit = MenuItem::new("Quit osutab", true, None);
+        let show = MenuItem::new("Show osu!tab", true, None);
+        let quit = MenuItem::new("Quit osu!tab", true, None);
         let menu = Menu::new();
         let built = menu.append(&show).and_then(|()| menu.append(&quit));
         let icon = Icon::from_rgba(icon_rgba(SIZE), SIZE, SIZE);
@@ -27,7 +27,7 @@ pub fn start(shared: Arc<Shared>) {
             (Ok(()), Ok(icon)) => TrayIconBuilder::new()
                 .with_menu(Box::new(menu))
                 .with_menu_on_left_click(false)
-                .with_tooltip("osutab")
+                .with_tooltip(concat!("osu!tab ", env!("CARGO_PKG_VERSION")))
                 .with_icon(icon)
                 .build(),
             (Err(e), _) => {

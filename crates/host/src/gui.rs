@@ -25,12 +25,17 @@ use crate::shared::Shared;
 use crate::theme::{self, Rgb, Theme, ThemeOverrides, MAX_THICKNESS, MIN_THICKNESS};
 use crate::tray;
 
-const WINDOW_TITLE: &str = "osutab";
+const WINDOW_TITLE: &str = "osu!tab";
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 const CHECK_EVERY: Duration = Duration::from_secs(1);
 const PROCESS_CHECK_EVERY: Duration = Duration::from_secs(3);
 // Long enough to check accuracy, short enough that it can't quietly slow a whole play session.
 const PRECISION_TEST_TIME: Duration = Duration::from_secs(120);
+// How long the tablet app gets to connect before the Play tab says it's missing.
+const APP_GRACE: Duration = Duration::from_secs(8);
+// A freeze this long is worth mentioning on the Play tab, for this long after it happened.
+const NOTICEABLE_FREEZE_MS: f32 = 500.0;
+const FREEZE_SHOWN_FOR: Duration = Duration::from_secs(15 * 60);
 const KEY_CAPTURE_LIMIT: Duration = Duration::from_secs(15);
 const QUICK_WIDTHS_MM: [f64; 4] = [80.0, 100.0, 120.0, 150.0];
 
@@ -126,8 +131,8 @@ fn tablet_check(state: DeviceState, connected: bool) -> Check {
     }
     match state {
         DeviceState::AdbMissing => bad(
-            "adb not found",
-            "Put Google's platform-tools folder next to osutab.exe. The README explains this.",
+            "adb.exe not found",
+            "Only the adb.exe USB path needs it. Switch to Direct USB in Settings, or put Google's platform-tools folder next to osu!tab.exe.",
         ),
         DeviceState::NoDevice => bad(
             "Tablet not found",
@@ -181,7 +186,7 @@ fn otd_checks(installed: bool, relay_connected: bool, windows_ink: bool) -> Vec<
     } else {
         bad(
             "Waiting for OpenTabletDriver",
-            "It's starting up. If this stays, open OpenTabletDriver and check \"osutab bridge\" is on in its Tools tab.",
+            "It's starting up. If this stays, open OpenTabletDriver and check \"osu!tab bridge\" is on in its Tools tab.",
         )
     });
     if windows_ink {
@@ -208,15 +213,37 @@ fn stretch_percent(px_per_mm: (f64, f64)) -> f64 {
     (px_per_mm.0.max(px_per_mm.1) / px_per_mm.0.min(px_per_mm.1) - 1.0) * 100.0
 }
 
-fn shape_check(px_per_mm: (f64, f64)) -> Check {
-    let percent = stretch_percent(px_per_mm);
-    if percent <= 1.0 {
-        return good(format!("Pen area matches your screen's shape ({:.1} px per mm)", px_per_mm.0));
+/// The tablet app's window. It only lines up with the pen at full screen.
+fn app_check(tablet_connected: bool, app_connected: bool, floating: bool, missing_for: Option<Duration>) -> Option<Check> {
+    if !tablet_connected {
+        return None;
     }
-    warn(
-        format!("Pen area is stretched by {percent:.0}%"),
-        "The same pen movement goes further one way than the other. The Pen area tab can fix this.",
-    )
+    if app_connected && floating {
+        return Some(warn(
+            "The tablet app isn't full screen",
+            "Its pen area won't line up with the pen in a floating window. Tap the full screen button in the window's title bar.",
+        ));
+    }
+    if !app_connected && missing_for.is_some_and(|d| d >= APP_GRACE) {
+        return Some(warn(
+            "The tablet app isn't open",
+            "The pen still works. The app shows your pen area: open osu!tab on the tablet.",
+        ));
+    }
+    None
+}
+
+/// The last time Windows held up the cursor for long enough to notice.
+fn freeze_check(last: Option<(Duration, f32, &str)>) -> Option<Check> {
+    let (ago, ms, program) = last?;
+    if ago > FREEZE_SHOWN_FOR || ms < NOTICEABLE_FREEZE_MS {
+        return None;
+    }
+    let when = if ago < Duration::from_secs(90) { "Just now".to_string() } else { format!("{} minutes ago", ago.as_secs() / 60) };
+    Some(warn(
+        format!("Windows held up the cursor for {:.1} s", ms / 1000.0),
+        format!("{when}, with {program} in front. A program that watches the mouse, such as an overlay, a macro tool, or mouse or lighting software, is the usual cause. Closing it usually fixes this."),
+    ))
 }
 
 /// The worst result decides the headline.
@@ -520,6 +547,10 @@ struct App {
     display: LazerDisplay,
     exe_dir: PathBuf,
     otd_windows_ink: bool,
+    otd_elevated: Option<bool>,
+    otd_area_watch: otd::AreaWatch,
+    otd_area: Option<otd::OtdArea>,
+    app_missing_since: Option<Instant>,
     apps: Vec<&'static str>,
     apps_checked: Option<Instant>,
     precision_ends: Option<Instant>,
@@ -691,7 +722,18 @@ impl App {
         if self.apps_checked.is_none_or(|t| t.elapsed() >= PROCESS_CHECK_EVERY) {
             let names = preflight::process_names();
             self.apps = preflight::interfering(names.iter().map(String::as_str));
+            self.otd_elevated = if self.shared.settings().output == Output::OpenTabletDriver { otd::daemon_elevated() } else { None };
             self.apps_checked = Some(Instant::now());
+        }
+        // The app gets a moment to connect before the Play tab says it's missing.
+        let tablet = self.shared.connected.load(Ordering::SeqCst);
+        if !tablet || self.shared.app_connected.load(Ordering::SeqCst) {
+            self.app_missing_since = None;
+        } else if self.app_missing_since.is_none() {
+            self.app_missing_since = Some(Instant::now());
+        }
+        if self.shared.settings().output == Output::OpenTabletDriver {
+            self.otd_area = self.otd_area_watch.area(&otd::data_dir());
         }
     }
 
@@ -701,16 +743,31 @@ impl App {
         let mut checks = vec![tablet_check(self.shared.device_state(), connected)];
         checks.extend(lazer_check(self.lazer));
         checks.extend(display_checks(&self.display));
-        if live.output == Output::Direct {
-            checks.push(shape_check(live.area.px_per_mm(&live.target)));
-        } else {
+        if live.output == Output::OpenTabletDriver {
             let installed = otd::program_dir(&self.exe_dir).is_some();
             let relay = self.shared.relay.connected.load(Ordering::SeqCst);
             checks.extend(otd_checks(installed, relay, self.otd_windows_ink));
+            if self.otd_elevated == Some(true) {
+                checks.push(bad(
+                    "OpenTabletDriver is running as administrator",
+                    "It doesn't work properly that way. Quit it from its tray icon, and osu!tab starts it again without admin rights.",
+                ));
+            }
+            if relay && self.otd_area.is_none() {
+                checks.push(warn(
+                    "OpenTabletDriver has no pen area for the S Pen yet",
+                    "Open OpenTabletDriver, pick osu!tab S Pen, and set an area in Absolute Mode. The tablet then shows it.",
+                ));
+            }
         }
+        let app_connected = self.shared.app_connected.load(Ordering::SeqCst);
+        let missing_for = self.app_missing_since.map(|t| t.elapsed());
+        checks.extend(app_check(connected, app_connected, self.shared.app_floating.load(Ordering::SeqCst), missing_for));
+        let freeze = self.shared.last_freeze.lock().unwrap().clone();
+        checks.extend(freeze_check(freeze.as_ref().map(|(at, ms, program)| (at.elapsed(), *ms, program.as_str()))));
         if let Some(problem) = self.shared.direct_problem.lock().unwrap().clone() {
             checks.push(warn(
-                "Direct USB isn't working, so osutab is using adb.exe",
+                "Direct USB isn't working, so osu!tab is using adb.exe",
                 format!("It tries again the next time the tablet connects. The error was: {problem}"),
             ));
         }
@@ -875,7 +932,7 @@ impl App {
     fn setup_screen(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         let palette = self.palette;
-        page_header(ui, "Welcome to osutab", &format!("Question {} of 2. You can change both later.", self.setup_step + 1), &palette);
+        page_header(ui, "Welcome to osu!tab", &format!("Question {} of 2. You can change both later.", self.setup_step + 1), &palette);
         self.card(ui, |app, ui| {
             if app.setup_step == 0 {
                 section_title(ui, "How will the tablet sit while you play?");
@@ -940,7 +997,7 @@ impl App {
     fn status_block(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette;
         let quit = egui::Button::new(RichText::new("Quit").color(palette.muted)).min_size(Vec2::new(ui.available_width(), 30.0));
-        if ui.add(quit).on_hover_text("Stops osutab and gives the pen back to Android").clicked() {
+        if ui.add(quit).on_hover_text("Stops osu!tab and gives the pen back to Android").clicked() {
             self.shared.stats.stop.store(true, Ordering::SeqCst);
         }
         ui.add_space(8.0);
@@ -1029,9 +1086,10 @@ impl App {
         let direct = self.shared.settings().output == Output::Direct;
         self.card_pair(ui, "play", |app, ui| {
             section_title(ui, "Pen area");
-            if direct {
+            if direct || app.otd_area.is_some() {
                 ui.vertical_centered(|ui| app.preview(ui, 170.0));
-            } else {
+            }
+            if !direct {
                 hint(ui, "Set in OpenTabletDriver.", &palette);
             }
         }, |app, ui| {
@@ -1044,9 +1102,9 @@ impl App {
             }
         });
         let closing = if self.shared.settings().close_to_tray {
-            "Closing this window keeps osutab running in the tray. Quit gives the pen back to Android."
+            "Closing this window keeps osu!tab running in the tray. Quit gives the pen back to Android."
         } else {
-            "Closing this window quits osutab and gives the pen back to Android."
+            "Closing this window quits osu!tab and gives the pen back to Android."
         };
         hint(ui, closing, &palette);
     }
@@ -1073,7 +1131,21 @@ impl App {
         page_header(ui, "Pen area", "The part of the tablet that covers your whole screen.", &palette);
         if self.shared.settings().output == Output::OpenTabletDriver {
             self.card(ui, |app, ui| {
-                ui.label("In OpenTabletDriver mode, the area, filters and buttons are set in OpenTabletDriver.");
+                match app.otd_area {
+                    Some(area) => {
+                        ui.horizontal(|ui| {
+                            ui.label(strong(format!("{:.1} x {:.1} mm", area.width, area.height)));
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| hint(ui, "OpenTabletDriver's area, shown on the tablet too", &palette));
+                        });
+                        ui.add_space(4.0);
+                        ui.vertical_centered(|ui| app.preview(ui, 210.0));
+                    }
+                    None => {
+                        ui.label("OpenTabletDriver has no pen area for the S Pen yet.");
+                    }
+                }
+                ui.add_space(6.0);
+                ui.label("In OpenTabletDriver mode, the area, filters and buttons are set in OpenTabletDriver. Changes there show here and on the tablet within a second.");
                 hint(ui, "It sees a landscape tablet, 313.8 x 195.9 mm. If you hold the tablet in portrait, set the area's Rotation there to 90 or 270.", &palette);
                 ui.add_space(6.0);
                 app.output_picker(ui);
@@ -1088,8 +1160,6 @@ impl App {
             });
             ui.add_space(4.0);
             ui.vertical_centered(|ui| app.preview(ui, 210.0));
-            ui.add_space(4.0);
-            app.stretch_fix(ui);
         });
         self.card_pair(ui, "size", |app, ui| {
             section_title(ui, "Size");
@@ -1183,35 +1253,13 @@ impl App {
             self.key_capture = None;
         } else if !in_front {
             self.key_capture = None;
-            self.message = "Stopped listening for a key, because osutab's window is no longer in front.".to_string();
+            self.message = "Stopped listening for a key, because osu!tab's window is no longer in front.".to_string();
         } else if elapsed >= KEY_CAPTURE_LIMIT {
             self.key_capture = None;
             self.message = "No key was pressed in time, so the side button didn't change.".to_string();
         } else {
             ctx.request_repaint_after(Duration::from_millis(30));
         }
-    }
-
-    /// Offers the two ways to fix a stretched area.
-    fn stretch_fix(&mut self, ui: &mut egui::Ui) {
-        let live = self.shared.live_config();
-        let px_per_mm = live.area.px_per_mm(&live.target);
-        if stretch_percent(px_per_mm) <= 1.0 {
-            return;
-        }
-        let aspect = screen_aspect_of(&self.shared);
-        let (max_w, max_h) = live.rotation.tablet_size_mm();
-        let (w, h) = (live.area.width_mm, live.area.height_mm);
-        let keep_width = (w, (w / aspect).clamp(MIN_AREA_MM, max_h));
-        let keep_height = ((h * aspect).clamp(MIN_AREA_MM, max_w), h);
-        ui.colored_label(self.palette.warning, format!("This area is stretched by {:.0}%. Fix it:", stretch_percent(px_per_mm)));
-        ui.horizontal_wrapped(|ui| {
-            for size in [keep_width, keep_height] {
-                if ui.button(format!("Make it {:.1} x {:.1} mm", size.0, size.1)).clicked() {
-                    self.set_size(size.0, size.1);
-                }
-            }
-        });
     }
 
     fn preset_row(&mut self, ui: &mut egui::Ui) {
@@ -1243,7 +1291,13 @@ impl App {
 
     /// The tablet, the pen area on it, and where the pen is, drawn the way the tablet shows them.
     fn preview(&self, ui: &mut egui::Ui, max_height: f32) {
-        let live = self.shared.live_config();
+        let mut live = self.shared.live_config();
+        // In OpenTabletDriver mode, its area is the one in use.
+        if live.output == Output::OpenTabletDriver {
+            if let Some(area) = self.otd_area {
+                live.area = otd::area_in_view(&area, live.rotation).resolve(live.rotation);
+            }
+        }
         let (tablet_w, tablet_h) = (live.area.tablet_w as f32, live.area.tablet_h as f32);
         let scale = (ui.available_width() / tablet_w).min(max_height / tablet_h);
         let (response, painter) = ui.allocate_painter(Vec2::new(tablet_w * scale, tablet_h * scale), egui::Sense::hover());
@@ -1615,7 +1669,7 @@ impl App {
             divider(ui);
             app.toggle_row(ui, "Pin the app", "Blocks Home and Back. Applies the next time the tablet connects.", s.screen_pinning, d.screen_pinning, |st, on| st.screen_pinning = on);
             if s.screen_pinning {
-                ui.colored_label(palette.warning, "When osutab quits, the tablet goes to its lock screen, so you'll need your PIN. If the cable is pulled while pinned, the app stays pinned until you hold Back and Recents.");
+                ui.colored_label(palette.warning, "When osu!tab quits, the tablet goes to its lock screen, so you'll need your PIN. If the cable is pulled while pinned, the app stays pinned until you hold Back and Recents.");
             }
         });
 
@@ -1623,7 +1677,7 @@ impl App {
             section_title(ui, "This program");
             app.toggle_row(ui, "Keep running in the tray when closed", "", s.close_to_tray, d.close_to_tray, |st, on| st.close_to_tray = on);
             divider(ui);
-            app.toggle_row(ui, "Start in the tray", "Applies the next time osutab starts.", s.start_minimized, d.start_minimized, |st, on| st.start_minimized = on);
+            app.toggle_row(ui, "Start in the tray", "Applies the next time osu!tab starts.", s.start_minimized, d.start_minimized, |st, on| st.start_minimized = on);
         });
 
         self.card(ui, |app, ui| {
@@ -1645,7 +1699,12 @@ impl App {
                 }
             });
             divider(ui);
-            hint(ui, "Direct USB skips adb.exe. In testing it started in a fraction of a second instead of about 5 seconds, was slightly faster than adb.exe, and was steadier when the CPU was busy. It stops adb.exe while osutab runs, so anything else using adb on this PC, such as Android Studio, loses the tablet. Applies the next time the tablet connects.", &palette);
+            hint(ui, "Direct USB needs nothing else installed, starts in a fraction of a second, and was the fastest and steadiest path in testing. It stops adb.exe while osu!tab runs, so anything else using adb on this PC, such as Android Studio, loses the tablet. The adb.exe path needs Google's platform-tools beside osu!tab.exe. Applies the next time the tablet connects.", &palette);
+        });
+        self.card(ui, |_, ui| {
+            section_title(ui, concat!("osu!tab ", env!("CARGO_PKG_VERSION")));
+            hint(ui, "A beta. Tested with a Samsung Galaxy Tab S8 Ultra, the S Pen that comes with it, and osu!lazer on Windows 11. Other tablets and osu!stable haven't been tested yet.", &palette);
+            hint(ui, "Settings and logs are in %APPDATA%\\osu!tab.", &palette);
         });
     }
 
@@ -1857,6 +1916,10 @@ pub fn run(shared: Arc<Shared>, tab: Tab, exe_dir: PathBuf) -> Result<(), eframe
                 display: LazerDisplay::default(),
                 exe_dir,
                 otd_windows_ink: false,
+                otd_elevated: None,
+                otd_area_watch: otd::AreaWatch::default(),
+                otd_area: None,
+                app_missing_since: None,
                 apps: Vec::new(),
                 apps_checked: None,
                 // Started with --test-mode, it stays on until turned off by hand.
@@ -1927,12 +1990,25 @@ mod tests {
     }
 
     #[test]
-    fn the_stretched_area_from_real_use_is_flagged() {
-        // 88 x 75.2 mm on a 2560 x 1600 screen, from a real session.
-        let check = shape_check((2560.0 / 88.0, 1600.0 / 75.2));
-        assert_eq!(check.level, CheckLevel::Warn);
-        assert!(check.title.contains("37%"), "{}", check.title);
-        assert_eq!(shape_check((2560.0 / 83.0, 1600.0 / 51.875)).level, CheckLevel::Good);
+    fn the_tablet_app_is_only_mentioned_when_something_is_wrong() {
+        let soon = Some(Duration::from_secs(1));
+        let later = Some(APP_GRACE);
+        assert!(app_check(false, false, false, later).is_none(), "no tablet, nothing to say about its app");
+        assert!(app_check(true, true, false, None).is_none());
+        assert!(app_check(true, false, false, soon).is_none(), "it gets a moment to connect");
+        assert!(app_check(true, false, false, later).unwrap().title.contains("isn't open"));
+        assert!(app_check(true, true, true, None).unwrap().title.contains("full screen"));
+    }
+
+    #[test]
+    fn a_cursor_freeze_shows_for_a_while_with_the_program_in_front() {
+        let check = freeze_check(Some((Duration::from_secs(30), 1600.0, "osu!.exe"))).unwrap();
+        assert!(check.title.contains("1.6 s"), "{}", check.title);
+        assert!(check.detail.unwrap().contains("osu!.exe"));
+        assert!(freeze_check(Some((Duration::from_secs(300), 900.0, "x.exe"))).unwrap().detail.unwrap().starts_with("5 minutes ago"));
+        assert!(freeze_check(Some((FREEZE_SHOWN_FOR + Duration::from_secs(1), 1600.0, "x.exe"))).is_none(), "an old one is forgotten");
+        assert!(freeze_check(Some((Duration::from_secs(1), 250.0, "x.exe"))).is_none(), "too short to notice");
+        assert!(freeze_check(None).is_none());
     }
 
     #[test]

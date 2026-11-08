@@ -22,8 +22,8 @@ namespace OsutabBridge
         public int InputReportLength => OsutabReport.FrameLength;
         public int OutputReportLength => 0;
         public int FeatureReportLength => 0;
-        public string? Manufacturer => "osutab";
-        public string? ProductName => "S Pen through osutab";
+        public string? Manufacturer => "osu!tab";
+        public string? ProductName => "S Pen through osu!tab";
         public string? FriendlyName => ProductName;
         public string? SerialNumber => "osutab";
         public string DevicePath => "osutab://s-pen";
@@ -37,8 +37,8 @@ namespace OsutabBridge
     }
 
     /// <summary>
-    /// Reads pen reports from osutab on this PC. It keeps trying to connect, because osutab can
-    /// start after OpenTabletDriver, and it reconnects whenever osutab restarts.
+    /// Reads pen reports from osu!tab on this PC. It keeps trying to connect, because osu!tab can
+    /// start after OpenTabletDriver, and it reconnects whenever osu!tab restarts.
     /// </summary>
     public class OsutabStream : IDeviceEndpointStream
     {

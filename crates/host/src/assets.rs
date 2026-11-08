@@ -18,7 +18,7 @@ const APP: Option<&[u8]> = None;
 const BRIDGE: Option<&[u8]> = Some(include_bytes!(env!("OSUTAB_BRIDGE_PATH")));
 #[cfg(not(embedded_bridge))]
 const BRIDGE: Option<&[u8]> = None;
-const BRIDGE_CONFIG: &[u8] = include_bytes!("../../../otd-plugin/osutab S Pen.json");
+const BRIDGE_CONFIG: &[u8] = include_bytes!("../../../otd-plugin/osu!tab S Pen.json");
 
 pub fn bridge_plugin() -> Option<&'static [u8]> {
     BRIDGE

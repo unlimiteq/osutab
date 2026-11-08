@@ -4,23 +4,26 @@
 use std::fs;
 use std::io::{self, ErrorKind, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant, SystemTime};
 
 use osutab_core::DOWN_FRAME_LEN;
 use serde_json::{json, Value};
 
 use crate::assets;
-use crate::mapping::{to_unit, Rotation};
+use crate::elevation::{self, Launched};
+use crate::mapping::{to_unit, AreaMm, Rotation, TABLET_LONG_MM, TABLET_SHORT_MM};
 
 pub const RELAY_PORT: u16 = 27193;
 const TOOL_PATH: &str = "OsutabBridge.OsutabBridgeTool";
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+/// The tablet's name in OpenTabletDriver, and the name it had before the program was osu!tab.
+pub const TABLET_NAME: &str = "osu!tab S Pen";
+const OLD_TABLET_NAME: &str = "osutab S Pen";
 const FLUSH_INTERVAL: Duration = Duration::from_millis(2);
+// How often to look at OpenTabletDriver's settings for a changed area.
+const AREA_CHECK_EVERY: Duration = Duration::from_millis(500);
 // The tablet configuration in otd-plugin: landscape, at 0.01 mm per unit.
 const OTD_MAX_X: f64 = 31376.0;
 const OTD_MAX_Y: f64 = 19589.0;
@@ -146,21 +149,118 @@ pub fn data_dir() -> PathBuf {
     base.join("OpenTabletDriver")
 }
 
-/// Adds the bridge tool to OpenTabletDriver's settings, keeping everything else in them. Returns
-/// the new text, or `None` if it's already there. A tool the user turned off stays off.
+fn is_our_tablet(name: Option<&str>) -> bool {
+    matches!(name, Some(TABLET_NAME | OLD_TABLET_NAME))
+}
+
+/// Adds the bridge tool to OpenTabletDriver's settings, keeping everything else in them, and moves
+/// a profile from the tablet's old name to its new one, so its area and filters carry over. Returns
+/// the new text, or `None` if nothing needed changing. A tool the user turned off stays off.
 pub fn settings_with_tool(existing: Option<&str>) -> Result<Option<String>, String> {
     let mut settings: Value = match existing {
-        Some(text) => serde_json::from_str(text).map_err(|e| format!("can't read settings: {e}"))?,
+        Some(text) => serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| format!("can't read settings: {e}"))?,
         None => json!({ "Profiles": [], "LockUsableAreaDisplay": true, "LockUsableAreaTablet": true }),
     };
     let root = settings.as_object_mut().ok_or("settings aren't an object")?;
+    let mut changed = false;
+    if let Some(profiles) = root.get_mut("Profiles").and_then(Value::as_array_mut) {
+        let has_new = profiles.iter().any(|p| p.get("Tablet").and_then(Value::as_str) == Some(TABLET_NAME));
+        for profile in profiles.iter_mut() {
+            if !has_new && profile.get("Tablet").and_then(Value::as_str) == Some(OLD_TABLET_NAME) {
+                profile["Tablet"] = json!(TABLET_NAME);
+                changed = true;
+            }
+        }
+    }
     let tools = root.entry("Tools").or_insert_with(|| json!([]));
     let list = tools.as_array_mut().ok_or("Tools isn't a list")?;
-    if list.iter().any(|t| t.get("Path").and_then(Value::as_str) == Some(TOOL_PATH)) {
+    if !list.iter().any(|t| t.get("Path").and_then(Value::as_str) == Some(TOOL_PATH)) {
+        list.push(json!({ "Path": TOOL_PATH, "Settings": [], "Enable": true }));
+        changed = true;
+    }
+    if !changed {
         return Ok(None);
     }
-    list.push(json!({ "Path": TOOL_PATH, "Settings": [], "Enable": true }));
     serde_json::to_string_pretty(&settings).map(Some).map_err(|e| e.to_string())
+}
+
+/// OpenTabletDriver's pen area for the S Pen, in mm on its landscape picture of the tablet, measured
+/// to the area's middle, with the size of the screen area it maps to.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct OtdArea {
+    pub width: f64,
+    pub height: f64,
+    pub x: f64,
+    pub y: f64,
+    pub rotation: f64,
+    pub display_width: f64,
+    pub display_height: f64,
+}
+
+/// Reads the S Pen's area from OpenTabletDriver's settings. `None` if there isn't one, or if the
+/// output mode is relative, where an area doesn't apply.
+pub fn area_from_settings(text: &str) -> Option<OtdArea> {
+    let settings: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
+    let profile = settings.get("Profiles")?.as_array()?.iter().find(|p| is_our_tablet(p.get("Tablet").and_then(Value::as_str)))?;
+    let mode = profile.get("OutputMode").and_then(|o| o.get("Path")).and_then(Value::as_str).unwrap_or("");
+    if mode.to_lowercase().contains("relative") {
+        return None;
+    }
+    let absolute = profile.get("AbsoluteModeSettings")?;
+    let (tablet, display) = (absolute.get("Tablet")?, absolute.get("Display")?);
+    let number = |object: &Value, key: &str| object.get(key)?.as_f64().filter(|v| v.is_finite());
+    let area = OtdArea {
+        width: number(tablet, "Width")?,
+        height: number(tablet, "Height")?,
+        x: number(tablet, "X")?,
+        y: number(tablet, "Y")?,
+        rotation: number(tablet, "Rotation").unwrap_or(0.0),
+        display_width: number(display, "Width")?,
+        display_height: number(display, "Height")?,
+    };
+    (area.width > 0.0 && area.height > 0.0 && area.display_width > 0.0 && area.display_height > 0.0).then_some(area)
+}
+
+/// OpenTabletDriver's area as the user sees the tablet. OpenTabletDriver always sees it landscape,
+/// so held upright, the picture is turned a quarter: clockwise for the USB port at the bottom.
+pub fn area_in_view(area: &OtdArea, rotation: Rotation) -> AreaMm {
+    let (long, short) = (TABLET_LONG_MM, TABLET_SHORT_MM);
+    let (offset_x, offset_y, turn) = match rotation {
+        Rotation::R90 | Rotation::R270 => (area.x - long / 2.0, area.y - short / 2.0, 0.0),
+        Rotation::R0 => (short / 2.0 - area.y, area.x - long / 2.0, 90.0),
+        Rotation::R180 => (area.y - short / 2.0, long / 2.0 - area.x, -90.0),
+    };
+    let mut rotation_deg = (area.rotation + turn) % 360.0;
+    if rotation_deg > 180.0 {
+        rotation_deg -= 360.0;
+    } else if rotation_deg < -180.0 {
+        rotation_deg += 360.0;
+    }
+    AreaMm { width: area.width, height: area.height, offset_x, offset_y, rotation_deg }
+}
+
+/// Keeps up with OpenTabletDriver's area without reading its settings on every call.
+#[derive(Default)]
+pub struct AreaWatch {
+    checked: Option<Instant>,
+    modified: Option<SystemTime>,
+    area: Option<OtdArea>,
+}
+
+impl AreaWatch {
+    pub fn area(&mut self, data: &Path) -> Option<OtdArea> {
+        if self.checked.is_some_and(|t| t.elapsed() < AREA_CHECK_EVERY) {
+            return self.area;
+        }
+        self.checked = Some(Instant::now());
+        let path = data.join("settings.json");
+        let modified = fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if modified != self.modified || modified.is_none() {
+            self.modified = modified;
+            self.area = fs::read_to_string(&path).ok().and_then(|text| area_from_settings(&text));
+        }
+        self.area
+    }
 }
 
 /// Puts the bridge plugin, tablet configuration and setting where OpenTabletDriver looks for them.
@@ -177,13 +277,15 @@ pub fn install(data: &Path) -> Result<(), String> {
         fs::write(path, bytes)
     };
     write(data.join("Plugins").join("OsutabBridge").join("OsutabBridge.dll"), plugin).map_err(|e| e.to_string())?;
-    write(data.join("Configurations").join("osutab S Pen.json"), config).map_err(|e| e.to_string())?;
+    write(data.join("Configurations").join(format!("{TABLET_NAME}.json")), config).map_err(|e| e.to_string())?;
+    // Two configurations for the same device would leave OpenTabletDriver to pick one.
+    let _ = fs::remove_file(data.join("Configurations").join(format!("{OLD_TABLET_NAME}.json")));
 
     let settings_path = data.join("settings.json");
     let existing = fs::read_to_string(&settings_path).ok();
     if let Some(updated) = settings_with_tool(existing.as_deref())? {
         if existing.is_some() {
-            let _ = fs::copy(&settings_path, data.join("settings.before-osutab.json"));
+            let _ = fs::copy(&settings_path, data.join("settings.before-osu!tab.json"));
         }
         fs::write(&settings_path, updated).map_err(|e| e.to_string())?;
     }
@@ -197,20 +299,31 @@ pub fn program_dir(exe_dir: &Path) -> Option<PathBuf> {
         .find(|dir| dir.join("OpenTabletDriver.Daemon.exe").exists())
 }
 
-/// Runs the daemon that does the work. It exits by itself if another copy is already running.
-pub fn start_daemon(dir: &Path) -> io::Result<Child> {
-    Command::new(dir.join("OpenTabletDriver.Daemon.exe"))
-        .current_dir(dir)
-        .creation_flags(CREATE_NO_WINDOW)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
+/// Runs the daemon that does the work, without administrator rights even if this program has
+/// them. It exits by itself if another copy is already running.
+pub fn start_daemon(dir: &Path) -> io::Result<Launched> {
+    elevation::spawn_unelevated(&dir.join("OpenTabletDriver.Daemon.exe"), dir, true)
 }
 
-/// Opens OpenTabletDriver's own settings window.
+/// Opens OpenTabletDriver's own settings window, without administrator rights too.
 pub fn open_settings_window(dir: &Path) -> io::Result<()> {
-    Command::new(dir.join("OpenTabletDriver.UX.Wpf.exe")).current_dir(dir).spawn().map(|_| ())
+    // Letting go of the handle leaves the window running.
+    elevation::spawn_unelevated(&dir.join("OpenTabletDriver.UX.Wpf.exe"), dir, false).map(|_| ())
+}
+
+/// True if a running OpenTabletDriver daemon has administrator rights, which stops it working
+/// properly. `None` if there isn't one running, or Windows won't say.
+pub fn daemon_elevated() -> Option<bool> {
+    let ids = crate::tuning::process_ids("OpenTabletDriver.Daemon.exe");
+    let mut answer = None;
+    for id in ids {
+        match elevation::process_is_elevated(id) {
+            Some(true) => return Some(true),
+            Some(false) => answer = Some(false),
+            None => {}
+        }
+    }
+    answer
 }
 
 /// Which output mode OpenTabletDriver's settings use, to warn about Windows Ink.
@@ -219,7 +332,7 @@ pub fn uses_windows_ink(data: &Path) -> bool {
         let Ok(settings) = serde_json::from_str::<Value>(&text) else { return false };
         let Some(profiles) = settings.get("Profiles").and_then(Value::as_array) else { return false };
         profiles.iter().any(|p| {
-            let matches_tablet = p.get("Tablet").and_then(Value::as_str) == Some("osutab S Pen");
+            let matches_tablet = is_our_tablet(p.get("Tablet").and_then(Value::as_str));
             let path = p.get("OutputMode").and_then(|o| o.get("Path")).and_then(Value::as_str).unwrap_or("");
             matches_tablet && path.to_lowercase().contains("ink")
         })
@@ -325,6 +438,70 @@ mod tests {
     }
 
     #[test]
+    fn a_profile_under_the_old_name_moves_to_the_new_one() {
+        let before = format!(r#"{{"Profiles":[{{"Tablet":"{OLD_TABLET_NAME}","Custom":1}}],"Tools":[{{"Path":"{TOOL_PATH}","Enable":true}}]}}"#);
+        let v: Value = serde_json::from_str(&settings_with_tool(Some(&before)).unwrap().unwrap()).unwrap();
+        assert_eq!(v["Profiles"][0]["Tablet"], TABLET_NAME);
+        assert_eq!(v["Profiles"][0]["Custom"], 1);
+        // Already moved: nothing to do.
+        let after = serde_json::to_string(&v).unwrap();
+        assert_eq!(settings_with_tool(Some(&after)).unwrap(), None);
+        // A profile under the new name wins, and the old one is left as it was.
+        let both = format!(r#"{{"Profiles":[{{"Tablet":"{OLD_TABLET_NAME}"}},{{"Tablet":"{TABLET_NAME}"}}],"Tools":[{{"Path":"{TOOL_PATH}"}}]}}"#);
+        assert_eq!(settings_with_tool(Some(&both)).unwrap(), None);
+    }
+
+    /// The settings OpenTabletDriver 0.6 wrote for the S Pen on the test PC.
+    const REAL_SETTINGS: &str = r#"{"Revision":"0.6.6.2","Profiles":[{"Tablet":"osutab S Pen","OutputMode":{"Path":"OpenTabletDriver.Desktop.Output.AbsoluteMode","Settings":[],"Enable":true},"AbsoluteModeSettings":{"Display":{"Width":2560.0,"Height":1600.0,"X":1280.0,"Y":800.0,"Rotation":0.0},"Tablet":{"Width":200.0,"Height":125.0,"X":100.0,"Y":133.39001,"Rotation":0.0},"EnableClipping":true,"EnableAreaLimiting":false,"LockAspectRatio":false}}]}"#;
+
+    #[test]
+    fn the_area_is_read_from_real_settings() {
+        let area = area_from_settings(REAL_SETTINGS).unwrap();
+        assert_eq!((area.width, area.height, area.x, area.y), (200.0, 125.0, 100.0, 133.39001));
+        assert_eq!((area.display_width, area.display_height), (2560.0, 1600.0));
+        let relative = REAL_SETTINGS.replace("Output.AbsoluteMode", "Output.RelativeMode");
+        assert_eq!(area_from_settings(&relative), None);
+        assert_eq!(area_from_settings(r#"{"Profiles":[{"Tablet":"Wacom"}]}"#), None);
+        assert_eq!(area_from_settings("not json"), None);
+    }
+
+    #[test]
+    fn landscape_areas_map_straight_across() {
+        let area = area_from_settings(REAL_SETTINGS).unwrap();
+        let view = area_in_view(&area, Rotation::R90);
+        assert!((view.offset_x - (100.0 - TABLET_LONG_MM / 2.0)).abs() < 1e-9);
+        assert!((view.offset_y - (133.39001 - TABLET_SHORT_MM / 2.0)).abs() < 1e-9);
+        assert_eq!((view.width, view.height, view.rotation_deg), (200.0, 125.0, 0.0));
+        assert_eq!(area_in_view(&area, Rotation::R270), view);
+    }
+
+    /// The outline must sit where the pen really maps: a pen position in the middle of
+    /// OpenTabletDriver's area must land in the middle of the drawn one, held any way.
+    #[test]
+    fn the_drawn_area_matches_what_opentabletdriver_maps() {
+        let area = OtdArea { width: 100.0, height: 60.0, x: 120.0, y: 80.0, rotation: 0.0, display_width: 2560.0, display_height: 1600.0 };
+        for rotation in [Rotation::R0, Rotation::R90, Rotation::R180, Rotation::R270] {
+            let view = area_in_view(&area, rotation).resolve(rotation);
+            // Find the sensor position OpenTabletDriver sees at the area's middle.
+            let (want_x, want_y) = (area.x / TABLET_LONG_MM, area.y / TABLET_SHORT_MM);
+            let max = (19589u16, 31376u16);
+            let mut best = (f64::MAX, (0.0, 0.0));
+            for sx in (0..=max.0).step_by(97) {
+                for sy in (0..=max.1).step_by(97) {
+                    let (lx, ly) = landscape_coordinates(sx, sy, max.0, max.1, rotation);
+                    let d = (lx as f64 / OTD_MAX_X - want_x).abs() + (ly as f64 / OTD_MAX_Y - want_y).abs();
+                    if d < best.0 {
+                        best = (d, to_unit(sx, sy, max.0, max.1, rotation));
+                    }
+                }
+            }
+            let (u, v) = best.1;
+            let mapped = view.map(u, v);
+            assert!((mapped.0 - 0.5).abs() < 0.02 && (mapped.1 - 0.5).abs() < 0.02, "{rotation:?}: {mapped:?}");
+        }
+    }
+
+    #[test]
     fn broken_settings_are_left_alone() {
         assert!(settings_with_tool(Some("not json")).is_err());
         assert!(settings_with_tool(Some("[1,2]")).is_err());
@@ -334,7 +511,7 @@ mod tests {
     fn windows_ink_is_noticed_only_for_our_tablet() {
         let dir = std::env::temp_dir().join(format!("osutab-test-otd-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
-        let ink = r#"{"Profiles":[{"Tablet":"osutab S Pen","OutputMode":{"Path":"VoiDPlugins.OutputMode.WinInkAbsoluteMode"}}]}"#;
+        let ink = r#"{"Profiles":[{"Tablet":"osu!tab S Pen","OutputMode":{"Path":"VoiDPlugins.OutputMode.WinInkAbsoluteMode"}}]}"#;
         fs::write(dir.join("settings.json"), ink).unwrap();
         assert!(uses_windows_ink(&dir));
         let other = r#"{"Profiles":[{"Tablet":"Wacom","OutputMode":{"Path":"VoiDPlugins.OutputMode.WinInkAbsoluteMode"}},{"Tablet":"osutab S Pen","OutputMode":{"Path":"OpenTabletDriver.Desktop.Output.AbsoluteMode"}}]}"#;

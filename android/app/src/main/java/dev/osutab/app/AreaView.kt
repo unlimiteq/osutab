@@ -79,6 +79,10 @@ class AreaView(
         set(value) {
             if (field != value) {
                 field = value
+                if (!value.editable) {
+                    cancelHold()
+                    setEditing(false)
+                }
                 invalidate()
             }
         }
@@ -257,7 +261,7 @@ class AreaView(
             logoPaint.alpha = alpha
             canvas.drawCircle(width / 2f, height / 2f - 90f, LOGO_RADIUS_PX, logoPaint)
             drawCentred(canvas, "Waiting for the PC", height / 2f + 20f, textPaint)
-            drawCentred(canvas, "Start osutab on your computer.", height / 2f + 66f, smallPaint)
+            drawCentred(canvas, "Start osu!tab on your computer.", height / 2f + 66f, smallPaint)
             textPaint.alpha = 255
             smallPaint.alpha = 255
             return
@@ -301,6 +305,7 @@ class AreaView(
                 holdPaint,
             )
         }
+        if (!prefs.editable && !editing) return
         val button = if (editing) "Done" else "Hold"
         canvas.drawText(button, BUTTON_CENTRE_PX - buttonTextPaint.measureText(button) / 2, height - BUTTON_CENTRE_PX + 8f, buttonTextPaint)
         if (editing) drawEditHint(canvas)
@@ -324,7 +329,7 @@ class AreaView(
         if (!connected || floating) return true
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                if (inEditButton(event.x, event.y)) {
+                if (inEditButton(event.x, event.y) && (prefs.editable || editing)) {
                     if (editing) setEditing(false) else startHold()
                 } else if (editing) {
                     // Delivers each touch as it happens, instead of once a frame.

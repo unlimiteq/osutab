@@ -4,7 +4,7 @@ using OpenTabletDriver.Plugin.Tablet;
 
 namespace OsutabBridge
 {
-    /// <summary>One pen report, decoded from the 32-byte frame osutab sends.</summary>
+    /// <summary>One pen report, decoded from the 32-byte frame osu!tab sends.</summary>
     public class OsutabReport : ITabletReport, ITiltReport, IProximityReport
     {
         public const int FrameLength = 32;

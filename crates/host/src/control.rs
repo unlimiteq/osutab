@@ -7,7 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::mapping::{AreaMm, Rotation, TABLET_LONG_MM};
+use crate::mapping::{ActiveArea, AreaMm, Rotation, TABLET_LONG_MM};
+use crate::otd;
 use crate::settings::{Output, Settings, MIN_AREA_MM};
 use crate::theme::Rgb;
 use crate::shared::{LiveConfig, Shared};
@@ -29,22 +30,32 @@ fn rotation_degrees(rotation: Rotation) -> u32 {
 
 /// What the tablet app is told. The sizes are the fitted ones, so it draws what's really in use.
 pub fn state_line(settings: &Settings, live: &LiveConfig, screen_width: f64, screen_aspect: f64) -> String {
-    let a = &live.area;
+    let name = &settings.presets[settings.active].name;
+    area_line(&live.area, settings.area().rotation_deg, live.rotation, settings.aspect_lock, screen_width, screen_aspect, name)
+}
+
+fn area_line(a: &ActiveArea, rotation_deg: f64, rotation: Rotation, aspect_lock: bool, screen_width: f64, screen_aspect: f64, name: &str) -> String {
     format!(
         "state {} {} {} {} {} {} {} {} {} {} {} {}\n",
         a.width_mm,
         a.height_mm,
         a.center_x - a.tablet_w / 2.0,
         a.center_y - a.tablet_h / 2.0,
-        settings.area().rotation_deg,
+        rotation_deg,
         a.tablet_w,
         a.tablet_h,
-        if settings.aspect_lock { 1 } else { 0 },
+        if aspect_lock { 1 } else { 0 },
         screen_aspect,
-        rotation_degrees(live.rotation),
+        rotation_degrees(rotation),
         screen_width,
-        settings.presets[settings.active].name,
+        name,
     )
+}
+
+/// OpenTabletDriver's area, drawn the same way, for when it's the one in use.
+pub fn otd_state_line(area: &otd::OtdArea, rotation: Rotation) -> String {
+    let view = otd::area_in_view(area, rotation);
+    area_line(&view.resolve(rotation), view.rotation_deg, rotation, false, area.display_width, area.display_width / area.display_height, "OpenTabletDriver")
 }
 
 /// Colors without the `#`, then outline thickness, outside darkness and whether to animate.
@@ -65,15 +76,26 @@ pub fn theme_line(settings: &Settings) -> String {
     )
 }
 
-/// The app's other settings. Following the screen means the app mustn't lock its orientation.
+/// The app's other settings. Following the screen means the app mustn't lock its orientation, and
+/// the area can only be edited on the tablet when it's this program's own.
 pub fn prefs_line(settings: &Settings, following: bool) -> String {
     format!(
-        "prefs {} {} {} {}\n",
+        "prefs {} {} {} {} {}\n",
         u8::from(settings.show_area_label),
         (settings.hold_to_edit_seconds * 1000.0) as u32,
         (settings.edit_timeout_seconds * 1000.0) as u32,
         u8::from(following),
+        u8::from(settings.output == Output::Direct),
     )
+}
+
+/// Reads a `window` line from the tablet app: true if its window is floating.
+pub fn parse_window_line(line: &str) -> Option<bool> {
+    match line.trim() {
+        "window floating" => Some(true),
+        "window full" => Some(false),
+        _ => None,
+    }
 }
 
 /// Reads a `rotation` line from the tablet app, sent when its screen turns.
@@ -117,6 +139,7 @@ fn serve(stream: TcpStream, shared: &Shared, id: u64, newest: &AtomicU64) -> io:
     let mut sent_theme = String::new();
     let mut sent_prefs = String::new();
     let mut unsaved_since: Option<Instant> = None;
+    let mut otd_area = otd::AreaWatch::default();
 
     while !shared.stats.stop.load(Ordering::SeqCst) && newest.load(Ordering::SeqCst) == id {
         let settings = shared.settings();
@@ -132,13 +155,17 @@ fn serve(stream: TcpStream, shared: &Shared, id: u64, newest: &AtomicU64) -> io:
             sent_prefs = prefs;
         }
         let live = shared.live_config();
-        let state = state_line(&settings, &live, live.target.width, live.target.width / live.target.height);
+        // In OpenTabletDriver mode the area is OpenTabletDriver's, so that's the one drawn.
+        let otd_area = if settings.output == Output::OpenTabletDriver { otd_area.area(&otd::data_dir()) } else { None };
+        let state = match &otd_area {
+            Some(area) => otd_state_line(area, live.rotation),
+            None => state_line(&settings, &live, live.target.width, live.target.width / live.target.height),
+        };
         if state != sent_state {
             writer.write_all(state.as_bytes())?;
             sent_state = state;
         }
-        // In OpenTabletDriver mode the area is OpenTabletDriver's, so ours would mislead.
-        let outline = settings.show_outline && settings.output == Output::Direct;
+        let outline = settings.show_outline && (settings.output == Output::Direct || otd_area.is_some());
         if sent_outline != Some(outline) {
             writer.write_all(if outline { b"outline 1\n" } else { b"outline 0\n" })?;
             sent_outline = Some(outline);
@@ -152,6 +179,8 @@ fn serve(stream: TcpStream, shared: &Shared, id: u64, newest: &AtomicU64) -> io:
                     unsaved_since = Some(Instant::now());
                 } else if let Some(rotation) = parse_rotation_line(&line) {
                     shared.set_screen_rotation(rotation);
+                } else if let Some(floating) = parse_window_line(&line) {
+                    shared.app_floating.store(floating, Ordering::SeqCst);
                 }
                 line.clear();
             }
@@ -191,6 +220,7 @@ pub fn run(shared: Arc<Shared>) {
             let _ = serve(stream, &shared, id, &newest);
             if newest.load(Ordering::SeqCst) == id {
                 shared.app_connected.store(false, Ordering::SeqCst);
+                shared.app_floating.store(false, Ordering::SeqCst);
             }
             let _ = shared.save_settings();
         });
@@ -214,8 +244,32 @@ mod tests {
 
     #[test]
     fn prefs_line_matches_what_the_app_parses() {
-        let settings = Settings { hold_to_edit_seconds: 1.5, edit_timeout_seconds: 30.0, show_area_label: false, ..Settings::default() };
-        assert_eq!(prefs_line(&settings, true), "prefs 0 1500 30000 1\n");
+        let mut settings = Settings { hold_to_edit_seconds: 1.5, edit_timeout_seconds: 30.0, show_area_label: false, ..Settings::default() };
+        // The exact form the Kotlin test checks on the other side.
+        assert_eq!(prefs_line(&settings, true), "prefs 0 1500 30000 1 1\n");
+        settings.output = Output::OpenTabletDriver;
+        assert_eq!(prefs_line(&settings, true), "prefs 0 1500 30000 1 0\n");
+    }
+
+    #[test]
+    fn window_lines_from_the_app() {
+        assert_eq!(parse_window_line("window floating\n"), Some(true));
+        assert_eq!(parse_window_line("window full"), Some(false));
+        assert_eq!(parse_window_line("window"), None);
+        assert_eq!(parse_window_line("rotation 90"), None);
+    }
+
+    #[test]
+    fn the_otd_area_is_sent_in_the_same_form() {
+        let area = otd::OtdArea { width: 200.0, height: 125.0, x: 100.0, y: 133.39, rotation: 0.0, display_width: 2560.0, display_height: 1600.0 };
+        let line = otd_state_line(&area, Rotation::R90);
+        let parts: Vec<&str> = line.trim().splitn(13, ' ').collect();
+        assert_eq!(parts.len(), 13);
+        assert_eq!(parts[1].parse::<f64>().unwrap(), 200.0);
+        assert!((parts[3].parse::<f64>().unwrap() - (100.0 - TABLET_LONG_MM / 2.0)).abs() < 1e-6);
+        assert_eq!(parts[8], "0", "OpenTabletDriver's area isn't locked to the screen's shape here");
+        assert_eq!(parts[11].parse::<f64>().unwrap(), 2560.0);
+        assert_eq!(parts[12], "OpenTabletDriver");
     }
 
     #[test]

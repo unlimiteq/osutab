@@ -23,6 +23,9 @@ class AreaStateTest {
     fun parsesPrefsFromThePc() {
         // The exact form the Rust test checks on the other side.
         assertEquals(AppPrefs(false, 1500, 30000, true), AppPrefs.parse("prefs 0 1500 30000 1"))
+        assertEquals(AppPrefs(false, 1500, 30000, true, editable = false), AppPrefs.parse("prefs 0 1500 30000 1 0"))
+        assertEquals(AppPrefs(true, 1000, 20000, false, editable = true), AppPrefs.parse("prefs 1 1000 20000 0 1"))
+        assertNull(AppPrefs.parse("prefs 0 1500 30000 1 0 extra"))
         assertNull(AppPrefs.parse("prefs 0 1500"))
         assertNull(AppPrefs.parse("prefs 0 soon 30000 1"))
         assertNull(AppPrefs.parse("theme 0 1500 30000 1"))

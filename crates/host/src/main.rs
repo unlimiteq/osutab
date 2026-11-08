@@ -7,6 +7,7 @@
 
 mod adb;
 mod adbkey;
+mod elevation;
 mod assets;
 mod control;
 mod engine;
@@ -83,7 +84,7 @@ struct Config {
     tab: gui::Tab,
 }
 
-const USAGE: &str = "osutab [--setup] [--no-gui] [--no-app] [--self-test] [--test-mode] [--busy-poll] [--helper-busy] [--ping-bench]
+const USAGE: &str = "osu!tab [--setup] [--no-gui] [--no-app] [--self-test] [--test-mode] [--busy-poll] [--helper-busy] [--ping-bench]
        [--stall-trace DIR] [--ping-ms MS] [--burst ON_MS OFF_MS] [--sendinput-bench SECONDS] [--tab NAME]
        [--rotation 0|90|180|270] [--duration SECONDS] [--no-tip-click] [--button-key KEY]
        [--no-grab] [--dry-run] [--adb PATH] [--helper PATH] [--usb-path adb|direct] [--no-tuning] [--keep-pen-filter] [--test-drops SECONDS] [--cpu-burn SECONDS]";
@@ -315,7 +316,7 @@ fn wide(text: &str) -> Vec<u16> {
 /// Shows an error someone can see even with no console.
 fn fatal(message: &str) -> ! {
     eprintln!("{message}");
-    let (text, title) = (wide(message), wide("osutab"));
+    let (text, title) = (wide(message), wide("osu!tab"));
     unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR) };
     std::process::exit(2);
 }
@@ -382,17 +383,18 @@ fn main() {
     }
     if !is_first_instance() {
         gui::show_existing_window();
-        println!("osutab is already running");
+        println!("osu!tab is already running");
         return;
     }
 
+    settings::move_old_data_folder();
     let path = settings::default_path();
     let data_dir = path.parent().map(Path::to_path_buf).unwrap_or_default();
     let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)).unwrap_or_default();
     let adb = Adb::new(find_adb(&config, &exe_dir));
     let adb_at_exit = adb.clone();
     let Some(helper) = find_helper(&config, &exe_dir, &data_dir) else {
-        fatal("The tablet helper is missing from this build. Run build.ps1 to rebuild osutab.");
+        fatal("The tablet helper is missing from this build. Run build.ps1 to rebuild osu!tab.");
     };
 
     let (saved, settings_note) = read_saved_settings(&path);

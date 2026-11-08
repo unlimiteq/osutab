@@ -36,10 +36,14 @@ pub struct Shared {
     pub stats: Stats,
     pub relay: Relay,
     /// The OpenTabletDriver daemon this program started, to stop when it quits.
-    pub otd_daemon: Mutex<Option<std::process::Child>>,
+    pub otd_daemon: Mutex<Option<crate::elevation::Launched>>,
     pub clock: Instant,
     pub connected: AtomicBool,
     pub app_connected: AtomicBool,
+    /// True while the tablet app says its window is floating instead of full screen.
+    pub app_floating: AtomicBool,
+    /// The last time Windows held up the cursor, for how long in ms, and the program in front.
+    pub last_freeze: Mutex<Option<(Instant, f32, String)>>,
     pub test_mode: AtomicBool,
     /// The engine waits on this while the setup screen is showing.
     pub setup_done: AtomicBool,
@@ -107,6 +111,8 @@ impl Shared {
             clock,
             connected: AtomicBool::new(false),
             app_connected: AtomicBool::new(false),
+            app_floating: AtomicBool::new(false),
+            last_freeze: Mutex::new(None),
             test_mode: AtomicBool::new(false),
             setup_done: AtomicBool::new(setup_done),
             window: AtomicIsize::new(0),

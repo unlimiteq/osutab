@@ -53,7 +53,7 @@ impl Output {
 pub enum UsbPath {
     /// Through adb.exe, which everything else on the PC can share.
     Adb,
-    /// Straight to the USB interface, which stops adb.exe while osutab runs.
+    /// Straight to the USB interface, which stops adb.exe while osu!tab runs.
     Direct,
 }
 
@@ -242,7 +242,25 @@ fn clean_preset_name(name: &str) -> Result<String, String> {
 
 pub fn default_path() -> PathBuf {
     let base = std::env::var_os("APPDATA").map(PathBuf::from).unwrap_or_default();
-    base.join("osutab").join("config.toml")
+    base.join(DATA_FOLDER).join("config.toml")
+}
+
+const DATA_FOLDER: &str = "osu!tab";
+// The folder's name before the program was called osu!tab.
+const OLD_DATA_FOLDER: &str = "osutab";
+
+/// Moves settings and logs from the folder's old name, the first time this version runs.
+pub fn move_old_data_folder() {
+    let Some(base) = std::env::var_os("APPDATA").map(PathBuf::from) else { return };
+    move_data_folder(&base.join(OLD_DATA_FOLDER), &base.join(DATA_FOLDER));
+}
+
+fn move_data_folder(old: &Path, new: &Path) {
+    if old.is_dir() && !new.exists() {
+        if let Err(e) = std::fs::rename(old, new) {
+            eprintln!("could not move {} to {}: {e}", old.display(), new.display());
+        }
+    }
 }
 
 pub fn orientation_name(rotation: Option<Rotation>) -> &'static str {
@@ -277,7 +295,7 @@ fn optional_number<T: ToString>(value: Option<T>) -> String {
 pub fn to_text(s: &Settings) -> String {
     let o = &s.theme_overrides;
     let mut text = format!(
-        "# osutab settings. Delete this file to be asked again on the next start.\n\
+        "# osu!tab settings. Delete this file to be asked again on the next start.\n\
          # output: direct, opentabletdriver\n\
          output = {}\n\
          # orientation: landscape-usb-right, landscape-usb-left, portrait-usb-bottom, portrait-usb-top, auto\n\
@@ -315,7 +333,7 @@ pub fn to_text(s: &Settings) -> String {
          # This program.\n\
          close_to_tray = {}\n\
          start_minimized = {}\n\
-         # usb_path: adb, direct. Direct stops adb.exe while osutab runs.\n\
+         # usb_path: adb, direct. Direct stops adb.exe while osu!tab runs.\n\
          usb_path = {}\n\
          \n\
          # Pen areas in millimetres, as you see the tablet. Offsets move an area from the\n\
@@ -644,7 +662,7 @@ fn ask_mm(
 
 /// Asks for orientation and pen area. `screen_aspect` is the monitor's width divided by height.
 pub fn ask(input: &mut impl BufRead, output: &mut impl Write, screen_aspect: f64) -> io::Result<Settings> {
-    writeln!(output, "\nosutab setup\n")?;
+    writeln!(output, "\nosu!tab setup\n")?;
     writeln!(output, "How will the tablet sit while you play?")?;
     writeln!(output, "  1. Landscape, USB port on the right (default)")?;
     writeln!(output, "  2. Landscape, USB port on the left")?;
@@ -787,6 +805,24 @@ mod tests {
             assert_eq!(parsed.problems, Vec::<String>::new());
             assert_eq!(parsed.settings, s);
         }
+    }
+
+    #[test]
+    fn the_old_data_folder_moves_once_and_never_over_a_new_one() {
+        let base = std::env::temp_dir().join(format!("osutab-test-move-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let (old, new) = (base.join("osutab"), base.join("osu!tab"));
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("config.toml"), "theme = Candy\n").unwrap();
+        move_data_folder(&old, &new);
+        assert!(!old.exists());
+        assert_eq!(std::fs::read_to_string(new.join("config.toml")).unwrap(), "theme = Candy\n");
+        // An old folder appearing later, from an old copy, leaves the new one alone.
+        std::fs::create_dir_all(&old).unwrap();
+        std::fs::write(old.join("config.toml"), "theme = Daylight\n").unwrap();
+        move_data_folder(&old, &new);
+        assert_eq!(std::fs::read_to_string(new.join("config.toml")).unwrap(), "theme = Candy\n");
+        let _ = std::fs::remove_dir_all(&base);
     }
 
     #[test]

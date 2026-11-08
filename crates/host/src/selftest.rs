@@ -65,7 +65,7 @@ pub fn sendinput_bench(seconds: u64) {
     );
 }
 
-/// Measures OpenTabletDriver's own delay, without the tablet: acts as osutab's link to the bridge
+/// Measures OpenTabletDriver's own delay, without the tablet: acts as osu!tab's link to the bridge
 /// plugin, sends made-up pen positions, and times how long the real cursor takes to move. It
 /// moves the cursor for the whole run, then puts it back.
 pub fn otd_bench(seconds: u64, target: Rect) {

@@ -7,11 +7,11 @@ using OpenTabletDriver.Plugin.Tablet;
 namespace OsutabTestFilters
 {
     /// <summary>
-    /// For testing only. Each filter moves the pen by a known distance, so `osutab --otd-bench`
+    /// For testing only. Each filter moves the pen by a known distance, so `osu!tab --otd-bench`
     /// can show that reports really passed through it. These are the two kinds of filter
     /// OpenTabletDriver has: one that runs per report, and one that runs on its own timer.
     /// </summary>
-    [PluginName("osutab test: shift 1000 units")]
+    [PluginName("osu!tab test: shift 1000 units")]
     public class ShiftFilter : IPositionedPipelineElement<IDeviceReport>
     {
         public PipelinePosition Position => PipelinePosition.PreTransform;
@@ -25,7 +25,7 @@ namespace OsutabTestFilters
         }
     }
 
-    [PluginName("osutab test: async shift 2000 units")]
+    [PluginName("osu!tab test: async shift 2000 units")]
     public class AsyncShiftFilter : AsyncPositionedPipelineElement<IDeviceReport>
     {
         private Vector2 shifted;

@@ -73,14 +73,17 @@ data class AppPrefs(
     val editTimeoutMs: Long = 20_000,
     /** The pen follows the screen's rotation, so the app mustn't lock its orientation. */
     val followScreen: Boolean = false,
+    /** False when another program sets the area, as OpenTabletDriver does, so it can't be edited here. */
+    val editable: Boolean = true,
 ) {
     companion object {
         /** Reads one `prefs ...` line from the PC, or null if it isn't one. */
         fun parse(line: String): AppPrefs? {
             val parts = line.trim().split(' ')
-            if (parts.size != 5 || parts[0] != "prefs") return null
+            // The last field is newer, so a PC from before it leaves editing on.
+            if (parts.size !in 5..6 || parts[0] != "prefs") return null
             return try {
-                AppPrefs(parts[1] == "1", parts[2].toLong(), parts[3].toLong(), parts[4] == "1")
+                AppPrefs(parts[1] == "1", parts[2].toLong(), parts[3].toLong(), parts[4] == "1", parts.getOrNull(5) != "0")
             } catch (_: NumberFormatException) {
                 null
             }

@@ -108,6 +108,7 @@ class MainActivity : Activity() {
      */
     private fun askForFullScreen() {
         view.floating = isInMultiWindowMode
+        reportWindow()
         if (isInMultiWindowMode && Build.VERSION.SDK_INT >= Build.VERSION_CODES.VANILLA_ICE_CREAM) {
             requestFullscreenMode(FULLSCREEN_MODE_REQUEST_ENTER, null)
             main.removeCallbacks(retryFullScreen)
@@ -173,6 +174,18 @@ class MainActivity : Activity() {
     private fun onPcSpoke() {
         main.removeCallbacks(showDisconnected)
         view.connected = true
+        // A new connection starts with nothing sent, so the PC hears this again.
+        reportedFloating = null
+        reportWindow()
+    }
+
+    private var reportedFloating: Boolean? = null
+
+    /** Tells the PC whether this window is full screen, so it can say so if it isn't. */
+    private fun reportWindow() {
+        if (reportedFloating == view.floating) return
+        reportedFloating = view.floating
+        outgoing.offer(if (view.floating) "window floating" else "window full")
     }
 
     private fun onPcGone() {
