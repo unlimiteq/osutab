@@ -49,6 +49,7 @@ The pen is read on the tablet before Android touches it, sent over the cable, an
 | 📦 **Nothing else to install** | One download. osu!tab sets up the tablet itself, with no adb.exe, platform-tools or drivers. |
 | 🖐️ **Your area, on the tablet** | The tablet shows your pen area. Move and resize it with your fingers, or set it on the PC. |
 | 🛡️ **Palm friendly** | The tablet app takes every touch, so a resting palm can't open anything. |
+| 🔘 **Side button** | Any key, or up to three together, such as Shift + 2 or Shift + Alt + 2. |
 | ✅ **Checks before you play** | The Play tab spots common problems, such as lazer settings and apps known to cause stutters. |
 | 📊 **Live numbers** | See how long each pen report takes, stage by stage, and test the cursor's accuracy. |
 | 🎨 **Themes** | Five themes, or your own colors, on both the PC and the tablet. |

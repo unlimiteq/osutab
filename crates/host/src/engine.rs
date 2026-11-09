@@ -334,7 +334,7 @@ fn pump<L: PenLink>(link: &mut L, hello: &Hello, injector: &mut Injector, shared
                 let before = if testing { inject::cursor_position() } else { (0, 0) };
 
                 if direct {
-                    injector.apply(&s, u, v, live.tip_click, live.button_scan);
+                    injector.apply(&s, u, v, live.tip_click, live.button_keys);
                 } else if !injector.dry_run {
                     // OpenTabletDriver would move the cursor, which a dry run mustn't.
                     let (x, y) = otd::landscape_coordinates(s.x, s.y, hello.max_x, hello.max_y, live.rotation);

@@ -1,5 +1,6 @@
 //! Keyboard keys for the pen's side button: their names, how each one is sent, and catching the
-//! next one pressed.
+//! next ones pressed. The button can press one key, or up to three together, such as
+//! `Left Shift + Left Alt + 2`.
 //!
 //! A key is held as a code. `0x00XX` is a scan code, `0xE0XX` an extended scan code such as the
 //! arrows or Right Ctrl, and `0xE1XX` a virtual key, for the few keys a scan code can't send.
@@ -154,14 +155,102 @@ fn name_for_code(code: u16) -> String {
     }
 }
 
-/// What to show for a saved key.
-pub fn label(name: &str) -> String {
+/// The most keys the side button presses at once.
+pub const MOST_KEYS: usize = 3;
+
+/// The keys the side button presses, in the order they go down. They're let go in reverse.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Combo([u16; MOST_KEYS]);
+
+impl Default for Combo {
+    fn default() -> Self {
+        Combo::EMPTY
+    }
+}
+
+impl Combo {
+    pub const EMPTY: Combo = Combo([0; MOST_KEYS]);
+
+    pub fn new(codes: &[u16]) -> Option<Combo> {
+        if codes.is_empty() || codes.len() > MOST_KEYS || codes.contains(&0) {
+            return None;
+        }
+        let mut keys = [0; MOST_KEYS];
+        keys[..codes.len()].copy_from_slice(codes);
+        Some(Combo(keys))
+    }
+
+    pub fn keys(self) -> impl DoubleEndedIterator<Item = u16> {
+        self.0.into_iter().filter(|&code| code != 0)
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0[0] == 0
+    }
+
+    /// As one number, so it fits in an atomic.
+    pub fn to_bits(self) -> u64 {
+        self.0[0] as u64 | (self.0[1] as u64) << 16 | (self.0[2] as u64) << 32
+    }
+
+    pub fn from_bits(bits: u64) -> Combo {
+        Combo([bits as u16, (bits >> 16) as u16, (bits >> 32) as u16])
+    }
+}
+
+/// The names in a saved combination. A `+` with nothing after it is part of the key before, so
+/// `Numpad +` is one key and `Numpad + + Z` is two.
+fn split_keys(name: &str) -> Vec<String> {
+    let mut keys: Vec<String> = Vec::new();
+    for part in name.split('+') {
+        let part = part.trim();
+        match keys.last_mut() {
+            Some(last) if part.is_empty() => last.push_str(" +"),
+            _ => keys.push(part.to_string()),
+        }
+    }
+    keys
+}
+
+/// The keys for a saved name: one, such as `z`, `esc`, `f5` or `` ` ``, or up to three joined by
+/// `+`, such as `left shift + left alt + 2`. A key named twice counts once.
+pub fn combo_for_name(name: &str) -> Option<Combo> {
+    let mut codes = Vec::new();
+    for key in split_keys(name) {
+        let code = code_for_name(&key)?;
+        if !codes.contains(&code) {
+            codes.push(code);
+        }
+    }
+    Combo::new(&codes)
+}
+
+fn key_label(name: &str) -> String {
     let name = name.trim();
     if name.chars().count() == 1 && name.chars().all(|c| c.is_ascii_alphanumeric()) {
         return name.to_uppercase();
     }
     code_for_name(name).map_or("None".to_string(), name_for_code)
 }
+
+/// What to show for a saved key or combination.
+pub fn label(name: &str) -> String {
+    if combo_for_name(name).is_none() {
+        return "None".to_string();
+    }
+    let mut seen = Vec::new();
+    let mut labels = Vec::new();
+    for key in split_keys(name) {
+        if let Some(code) = code_for_name(&key).filter(|code| !seen.contains(code)) {
+            seen.push(code);
+            labels.push(key_label(&key));
+        }
+    }
+    labels.join(" + ")
+}
+
+/// Both of each Ctrl, Shift, Alt and Win, which come first in a combination whenever they were pressed.
+const MODIFIERS: [u16; 8] = [0x1D, 0x2A, 0x36, 0x38, EXTENDED | 0x1D, EXTENDED | 0x38, EXTENDED | 0x5B, EXTENDED | 0x5C];
 
 /// The virtual key, scan code and flags that SendInput needs for a key.
 pub fn key_fields(code: u16, up: bool) -> (u16, u16, u32) {
@@ -194,48 +283,110 @@ fn name_from_message(vk: u16, scan: u32, extended: bool) -> String {
     }
 }
 
-/// The key a message is about, if it's a press. Windows only reports Print Screen when it's let go.
-fn pressed_key(message: u32, vk: u16, details: isize) -> Option<(u32, bool)> {
-    let held_already = details & (1 << 30) != 0;
-    let press = match message {
-        WM_KEYDOWN | WM_SYSKEYDOWN => !held_already,
-        WM_KEYUP | WM_SYSKEYUP => vk == VK_SNAPSHOT,
-        _ => false,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum KeyEvent {
+    Press,
+    /// Still held, and Windows is repeating it.
+    Repeat,
+    Release,
+}
+
+/// What a message says about a key, with the key's scan code and whether it's extended.
+fn key_event(message: u32, details: isize) -> Option<(KeyEvent, u32, bool)> {
+    let event = match message {
+        WM_KEYDOWN | WM_SYSKEYDOWN if details & (1 << 30) != 0 => KeyEvent::Repeat,
+        WM_KEYDOWN | WM_SYSKEYDOWN => KeyEvent::Press,
+        WM_KEYUP | WM_SYSKEYUP => KeyEvent::Release,
+        _ => return None,
     };
-    press.then_some((((details >> 16) & 0xFF) as u32, details & (1 << 24) != 0))
+    Some((event, ((details >> 16) & 0xFF) as u32, details & (1 << 24) != 0))
+}
+
+/// The keys pressed since listening began, and the choice once one is let go.
+struct Caught {
+    pressed: Vec<(u16, String)>,
+    done: Option<String>,
+}
+
+impl Caught {
+    const EMPTY: Caught = Caught { pressed: Vec::new(), done: None };
+
+    fn press(&mut self, code: u16, name: String) {
+        if self.pressed.len() < MOST_KEYS && !self.pressed.iter().any(|(c, _)| *c == code) {
+            self.pressed.push((code, name));
+        }
+    }
+
+    /// Modifiers first, then the rest, each in the order pressed.
+    fn choice(&self) -> String {
+        let mut keys: Vec<&(u16, String)> = self.pressed.iter().collect();
+        keys.sort_by_key(|(code, _)| !MODIFIERS.contains(code));
+        keys.iter().map(|(_, name)| name.as_str()).collect::<Vec<_>>().join(" + ")
+    }
 }
 
 static LISTENING: AtomicBool = AtomicBool::new(false);
-static CAUGHT: Mutex<Option<String>> = Mutex::new(None);
+static CAUGHT: Mutex<Caught> = Mutex::new(Caught::EMPTY);
+
+fn caught() -> std::sync::MutexGuard<'static, Caught> {
+    CAUGHT.lock().unwrap_or_else(|e| e.into_inner())
+}
 
 /// Sees each message for the window before anything else does. It only does anything while a
 /// `KeyCapture` exists, and runs on the window's thread, so it's never in the pen's path. True stops
 /// the message, so choosing Esc or Tab does nothing else in this window.
+///
+/// Keys count as they go down, and the choice is made when one of them is let go, so Shift can be
+/// held for Shift + 2, or pressed and let go on its own.
 pub fn on_window_message(message: *const c_void) -> bool {
     if !LISTENING.load(Ordering::SeqCst) {
         return false;
     }
     let message = unsafe { &*(message as *const MSG) };
     let vk = message.wParam as u16;
-    let Some((scan, extended)) = pressed_key(message.message, vk, message.lParam) else { return false };
-    *CAUGHT.lock().unwrap_or_else(|e| e.into_inner()) = Some(name_from_message(vk, scan, extended));
-    LISTENING.store(false, Ordering::SeqCst);
+    let Some((event, scan, extended)) = key_event(message.message, message.lParam) else { return false };
+    let code = code_from_message(vk, scan, extended);
+    let mut caught = caught();
+    match event {
+        KeyEvent::Press => caught.press(code, name_from_message(vk, scan, extended)),
+        KeyEvent::Repeat => {}
+        KeyEvent::Release => {
+            // Windows only reports Print Screen when it's let go.
+            if vk == VK_SNAPSHOT {
+                caught.press(code, name_from_message(vk, scan, extended));
+            }
+            // A key that was already down when listening began doesn't count.
+            if caught.pressed.iter().any(|(c, _)| *c == code) {
+                caught.done = Some(caught.choice());
+                LISTENING.store(false, Ordering::SeqCst);
+            }
+        }
+    }
     true
 }
 
-/// Waits for the next key pressed while the window is in front.
+/// Waits for the next key, or keys held together, while the window is in front.
 pub struct KeyCapture;
 
 impl KeyCapture {
     pub fn start() -> Self {
-        *CAUGHT.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        *caught() = Caught::EMPTY;
         LISTENING.store(true, Ordering::SeqCst);
         KeyCapture
     }
 
-    /// The name of the key, once one has been pressed.
+    /// The name to save, once a key has been let go.
     pub fn poll(&self) -> Option<String> {
-        CAUGHT.lock().unwrap_or_else(|e| e.into_inner()).take()
+        caught().done.take()
+    }
+
+    /// The keys held so far, to show while waiting. Empty before the first.
+    pub fn so_far(&self) -> String {
+        let caught = caught();
+        if caught.pressed.is_empty() {
+            return String::new();
+        }
+        label(&caught.choice())
     }
 }
 
@@ -340,35 +491,151 @@ mod tests {
     }
 
     #[test]
-    fn only_a_new_press_counts() {
+    fn messages_say_whether_a_key_went_down_repeated_or_came_up() {
         let details = |scan: isize, extended: bool, repeat: bool| (scan << 16) | if extended { 1 << 24 } else { 0 } | if repeat { 1 << 30 } else { 0 };
-        assert_eq!(pressed_key(WM_KEYDOWN, VK_ESCAPE, details(0x01, false, false)), Some((0x01, false)));
-        assert_eq!(pressed_key(WM_SYSKEYDOWN, VK_F10, details(0x44, false, false)), Some((0x44, false)));
-        assert_eq!(pressed_key(WM_KEYDOWN, VK_UP, details(0x48, true, false)), Some((0x48, true)));
-        // Still held from before.
-        assert_eq!(pressed_key(WM_KEYDOWN, VK_ESCAPE, details(0x01, false, true)), None);
-        // Letting go isn't a press, except for the one key that only reports that.
-        assert_eq!(pressed_key(WM_KEYUP, VK_ESCAPE, details(0x01, false, true)), None);
-        assert_eq!(pressed_key(WM_KEYUP, VK_SNAPSHOT, details(0x37, true, true)), Some((0x37, true)));
+        assert_eq!(key_event(WM_KEYDOWN, details(0x01, false, false)), Some((KeyEvent::Press, 0x01, false)));
+        assert_eq!(key_event(WM_SYSKEYDOWN, details(0x44, false, false)), Some((KeyEvent::Press, 0x44, false)));
+        assert_eq!(key_event(WM_KEYDOWN, details(0x48, true, false)), Some((KeyEvent::Press, 0x48, true)));
+        assert_eq!(key_event(WM_KEYDOWN, details(0x01, false, true)), Some((KeyEvent::Repeat, 0x01, false)));
+        assert_eq!(key_event(WM_KEYUP, details(0x01, false, true)), Some((KeyEvent::Release, 0x01, false)));
+        assert_eq!(key_event(WM_SYSKEYUP, details(0x38, false, true)), Some((KeyEvent::Release, 0x38, false)));
         // Not a key at all.
-        assert_eq!(pressed_key(0x0200, 0, 0), None);
+        assert_eq!(key_event(0x0200, 0), None);
     }
+
+    /// The messages a window gets for a key, as Windows sends them.
+    fn key_message(vk: u16, scan: isize, extended: bool, down: bool) -> MSG {
+        let message = match (down, vk == VK_MENU || vk == VK_F10) {
+            (true, false) => WM_KEYDOWN,
+            (true, true) => WM_SYSKEYDOWN,
+            (false, false) => WM_KEYUP,
+            (false, true) => WM_SYSKEYUP,
+        };
+        let details = (scan << 16) | if extended { 1 << 24 } else { 0 } | if down { 0 } else { (1 << 30) | (1 << 31) };
+        MSG { hwnd: std::ptr::null_mut(), message, wParam: vk as usize, lParam: details, time: 0, pt: unsafe { std::mem::zeroed() } }
+    }
+
+    fn send(vk: u16, scan: isize, extended: bool, down: bool) -> bool {
+        let message = key_message(vk, scan, extended, down);
+        on_window_message(&message as *const MSG as *const c_void)
+    }
+
+    // Each test that listens holds this, because listening is one switch for the whole program.
+    static ONE_LISTENER: Mutex<()> = Mutex::new(());
 
     #[test]
     fn listening_catches_one_key_and_then_stops() {
-        let message = |vk: u16, scan: isize| MSG { hwnd: std::ptr::null_mut(), message: WM_KEYDOWN, wParam: vk as usize, lParam: scan << 16, time: 0, pt: unsafe { std::mem::zeroed() } };
-        let esc = message(VK_ESCAPE, 0x01);
-        let esc = &esc as *const MSG as *const c_void;
-        assert!(!on_window_message(esc), "nothing should be stopped before listening");
+        let _one = ONE_LISTENER.lock().unwrap_or_else(|e| e.into_inner());
+        assert!(!send(VK_ESCAPE, 0x01, false, true), "nothing should be stopped before listening");
         let capture = KeyCapture::start();
         assert_eq!(capture.poll(), None);
-        assert!(on_window_message(esc), "the key should be stopped");
+        assert!(send(VK_ESCAPE, 0x01, false, true), "the key should be stopped");
+        assert_eq!(capture.poll(), None, "the choice is made when the key is let go");
+        assert_eq!(capture.so_far(), "Esc");
+        assert!(send(VK_ESCAPE, 0x01, false, true) && send(VK_ESCAPE, 0x01, false, false));
         assert_eq!(capture.poll().as_deref(), Some("Esc"));
-        assert!(!on_window_message(esc), "only one key should be taken");
+        assert!(!send(VK_ESCAPE, 0x01, false, true), "only one choice should be taken");
         let capture2 = KeyCapture::start();
         drop(capture2);
-        assert!(!on_window_message(esc), "canceling should stop listening");
+        assert!(!send(VK_ESCAPE, 0x01, false, true), "canceling should stop listening");
         drop(capture);
+    }
+
+    #[test]
+    fn shift_on_its_own_is_a_key() {
+        let _one = ONE_LISTENER.lock().unwrap_or_else(|e| e.into_inner());
+        let capture = KeyCapture::start();
+        send(VK_SHIFT, 0x2A, false, true);
+        send(VK_SHIFT, 0x2A, false, true);
+        assert_eq!(capture.poll(), None, "holding Shift shouldn't choose it yet");
+        send(VK_SHIFT, 0x2A, false, false);
+        assert_eq!(capture.poll().as_deref(), Some("Left Shift"));
+    }
+
+    #[test]
+    fn keys_held_together_become_one_choice_with_modifiers_first() {
+        let _one = ONE_LISTENER.lock().unwrap_or_else(|e| e.into_inner());
+        let capture = KeyCapture::start();
+        send(VK_SHIFT, 0x2A, false, true);
+        send(VK_MENU, 0x38, false, true);
+        assert_eq!(capture.so_far(), "Left Shift + Left Alt");
+        send(b'2' as u16, 0x03, false, true);
+        send(b'2' as u16, 0x03, false, false);
+        let choice = capture.poll().expect("letting go of 2 should choose");
+        assert_eq!(choice, "Left Shift + Left Alt + 2");
+        assert_eq!(label(&choice), "Left Shift + Left Alt + 2");
+        let combo = combo_for_name(&choice).unwrap();
+        assert_eq!(combo.keys().collect::<Vec<_>>(), vec![0x2A, 0x38, code_for_name("2").unwrap()]);
+        // The rest of the keys coming up afterwards change nothing.
+        assert!(!send(VK_MENU, 0x38, false, false));
+
+        // Pressed the other way round, the modifier still comes first.
+        let capture = KeyCapture::start();
+        send(b'Z' as u16, 0x2C, false, true);
+        send(VK_CONTROL, 0x1D, true, true);
+        send(VK_CONTROL, 0x1D, true, false);
+        assert_eq!(capture.poll().as_deref(), Some("Right Ctrl + z"));
+    }
+
+    #[test]
+    fn a_fourth_key_and_keys_held_from_before_are_left_out() {
+        let _one = ONE_LISTENER.lock().unwrap_or_else(|e| e.into_inner());
+        let capture = KeyCapture::start();
+        // Space was held when listening began, so letting it go doesn't choose anything.
+        assert!(send(VK_SPACE, 0x39, false, false));
+        assert_eq!(capture.poll(), None);
+        send(VK_CONTROL, 0x1D, false, true);
+        send(VK_SHIFT, 0x2A, false, true);
+        send(VK_MENU, 0x38, false, true);
+        send(VK_F5, 0x3F, false, true);
+        assert_eq!(capture.so_far(), "Left Ctrl + Left Shift + Left Alt");
+        send(VK_F5, 0x3F, false, false);
+        assert_eq!(capture.poll(), None, "F5 wasn't one of the three");
+        send(VK_SHIFT, 0x2A, false, false);
+        assert_eq!(capture.poll().as_deref(), Some("Left Ctrl + Left Shift + Left Alt"));
+    }
+
+    #[test]
+    fn print_screen_counts_although_windows_only_says_when_it_comes_up() {
+        let _one = ONE_LISTENER.lock().unwrap_or_else(|e| e.into_inner());
+        let capture = KeyCapture::start();
+        send(VK_SHIFT, 0x2A, false, true);
+        send(VK_SNAPSHOT, 0x37, true, false);
+        assert_eq!(capture.poll().as_deref(), Some("Left Shift + Print Screen"));
+    }
+
+    #[test]
+    fn combinations_read_back_from_what_is_saved() {
+        let shift_2 = combo_for_name("left shift + 2").unwrap();
+        assert_eq!(shift_2.keys().collect::<Vec<_>>(), vec![0x2A, code_for_name("2").unwrap()]);
+        assert_eq!(combo_for_name("Left Shift+2"), Some(shift_2));
+        assert_eq!(combo_for_name("z"), Combo::new(&[code_for_name("z").unwrap()]));
+        assert_eq!(combo_for_name("ctrl + shift + alt").unwrap().keys().count(), 3);
+        // Numpad + keeps its plus.
+        assert_eq!(combo_for_name("Numpad +"), Combo::new(&[0x4E]));
+        assert_eq!(combo_for_name("Numpad + + z"), Combo::new(&[0x4E, code_for_name("z").unwrap()]));
+        assert_eq!(combo_for_name("z + Numpad +"), Combo::new(&[code_for_name("z").unwrap(), 0x4E]));
+        assert_eq!(label("Numpad + + z"), "Numpad + + Z");
+        // Named twice counts once.
+        assert_eq!(combo_for_name("z + Z"), combo_for_name("z"));
+        assert_eq!(label("z + Z"), "Z");
+        // Too many, or any part that isn't a key, is no key at all.
+        assert_eq!(combo_for_name("ctrl + shift + alt + z"), None);
+        assert_eq!(combo_for_name("shift + nonsense"), None);
+        assert_eq!(combo_for_name("shift +"), None);
+        assert_eq!(combo_for_name("+"), None);
+        assert_eq!(label("shift + nonsense"), "None");
+    }
+
+    #[test]
+    fn a_combination_fits_in_one_number() {
+        for combo in [Combo::default(), Combo::new(&[0x2C]).unwrap(), Combo::new(&[0x2A, EXTENDED | 0x38, VIRTUAL | VK_PAUSE]).unwrap()] {
+            assert_eq!(Combo::from_bits(combo.to_bits()), combo);
+        }
+        assert!(Combo::default().is_empty());
+        assert!(Combo::from_bits(0).is_empty());
+        assert_eq!(Combo::new(&[]), None);
+        assert_eq!(Combo::new(&[1, 2, 3, 4]), None);
     }
 
     #[test]

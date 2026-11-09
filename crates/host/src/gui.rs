@@ -1224,7 +1224,8 @@ impl App {
         self.toggle_row(ui, "Pen tip clicks", "", settings.tip_click, defaults.tip_click, |s, on| s.tip_click = on);
         self.setting_row(ui, "Side button key", "", |app, ui| {
             let palette = app.palette;
-            match key_picker(ui, &settings.button_key, app.key_capture.is_some(), &palette) {
+            let held = app.key_capture.as_ref().map(|(capture, _)| capture.so_far());
+            match key_picker(ui, &settings.button_key, held.as_deref(), &palette) {
                 Some(KeyPick::Listen) => app.key_capture = Some((KeyCapture::start(), Instant::now())),
                 Some(KeyPick::Cancel) => app.key_capture = None,
                 Some(KeyPick::Clear) => app.set_button_key(String::new()),
@@ -1801,16 +1802,20 @@ enum KeyPick {
     Clear,
 }
 
-/// Shows the side button's key, or asks for one while listening. Drawn from the right.
-fn key_picker(ui: &mut egui::Ui, key: &str, listening: bool, palette: &Palette) -> Option<KeyPick> {
+/// Shows the side button's key, or asks for one while listening, with the keys held so far.
+/// Drawn from the right.
+fn key_picker(ui: &mut egui::Ui, key: &str, listening: Option<&str>, palette: &Palette) -> Option<KeyPick> {
     let mut pick = None;
-    if listening {
+    if let Some(held) = listening {
         if ui.button("Cancel").clicked() {
             pick = Some(KeyPick::Cancel);
         }
-        ui.colored_label(palette.accent, "Press any key");
+        let prompt = if held.is_empty() { "Press a key, or up to 3 together".to_string() } else { format!("{held} + \u{2026}") };
+        ui.colored_label(palette.accent, prompt);
     } else {
-        let response = ui.button(crate::keys::label(key)).on_hover_text("Click, then press the key you want.");
+        let response = ui
+            .button(crate::keys::label(key))
+            .on_hover_text("Click, then press a key. For a combination such as Shift + 2, hold the keys down, then let go.");
         if response.clicked() {
             pick = Some(KeyPick::Listen);
         }
@@ -2079,11 +2084,13 @@ mod tests {
         let rtl = egui::Layout::right_to_left(egui::Align::Min);
         let right_end = |rect: egui::Rect| Pos2::new(rect.right() - 6.0, rect.center().y);
         let left_end = |rect: egui::Rect| Pos2::new(rect.left() + 6.0, rect.center().y);
-        let cases: [(&str, bool, &dyn Fn(egui::Rect) -> Pos2, KeyPick); 4] = [
-            ("", false, &right_end, KeyPick::Listen),
-            ("esc", false, &right_end, KeyPick::Listen),
-            ("esc", false, &left_end, KeyPick::Clear),
-            ("esc", true, &right_end, KeyPick::Cancel),
+        let cases: [(&str, Option<&str>, &dyn Fn(egui::Rect) -> Pos2, KeyPick); 6] = [
+            ("", None, &right_end, KeyPick::Listen),
+            ("esc", None, &right_end, KeyPick::Listen),
+            ("esc", None, &left_end, KeyPick::Clear),
+            ("left shift + left alt + 2", None, &left_end, KeyPick::Clear),
+            ("esc", Some(""), &right_end, KeyPick::Cancel),
+            ("esc", Some("Left Shift"), &right_end, KeyPick::Cancel),
         ];
         for (key, listening, position, wanted) in cases {
             let mut got = None;
@@ -2094,7 +2101,7 @@ mod tests {
                 })
                 .inner
             });
-            assert_eq!(got, Some(wanted), "{key} {listening}");
+            assert_eq!(got, Some(wanted), "{key} {listening:?}");
         }
     }
 

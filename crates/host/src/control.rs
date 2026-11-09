@@ -381,7 +381,7 @@ mod tests {
             rotation: Rotation::R90,
             area: settings.area().resolve(Rotation::R90),
             tip_click: true,
-            button_scan: None,
+            button_keys: None,
         };
         let line = state_line(&settings, &live, 2560.0, 1.6);
         assert!(line.ends_with('\n'));

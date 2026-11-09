@@ -36,7 +36,11 @@ The Play tab lists anything that could get in the way, with what to do about it.
 
 ### The pen's side button
 
-On the Pen area tab, click the button next to **Side button key**, then press the key you want. Any key Windows can see works, including Esc, `` ` ``, the function keys, Ctrl, Shift, the arrows and the numpad. It's one key, not a combination. Inside osu!tab the key you press only sets the button, but Windows still reacts to a few keys, so Caps Lock will still switch and the Windows key will still open Start. **Clear** removes it.
+On the Pen area tab, click the button next to **Side button key**, then press the key you want and let go. Any key Windows can see works, including Esc, `` ` ``, the function keys, Ctrl, Shift, the arrows and the numpad.
+
+It can also be a combination of up to three keys, such as **Shift + 2** for `!` or **Shift + Alt + 2** for a hotkey: hold the keys down together, then let go. Nothing is chosen until you let go of a key, so Shift on its own still works too. Ctrl, Shift, Alt and Win always go first, whatever order you pressed them in, and the button presses the keys in that order and lets go of them the other way round.
+
+Inside osu!tab the keys you press only set the button, but Windows still reacts to a few keys, so Caps Lock will still switch and the Windows key will still open Start. **Clear** removes it.
 
 The Fn key on most laptops can't be chosen, because it's handled by the keyboard and Windows never sees it. Pressing Fn with another key sets whatever that pair sends, such as a function key or a volume key.
 
@@ -242,7 +246,7 @@ Started from a terminal, osu!tab prints its messages there.
 | `--setup` | Shows the setup questions again. |
 | `--rotation 0\|90\|180\|270` | Overrides the saved orientation for this run. |
 | `--no-tip-click` | The pen tip doesn't click. |
-| `--button-key KEY` | Maps the side button to a key for this run, such as `z`, `esc`, `f5` or `` ` ``. |
+| `--button-key KEY` | Maps the side button to a key for this run, such as `z`, `esc`, `f5` or `` ` ``, or up to three joined by `+`, such as `"left shift + 2"`. |
 | `--no-grab` | Android keeps receiving the pen too. |
 | `--no-gui` | Runs in the console with no window, and asks setup questions there. |
 | `--no-app` | Doesn't install or open the tablet app. |

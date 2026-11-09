@@ -21,7 +21,7 @@ pub struct LiveConfig {
     pub rotation: Rotation,
     pub area: ActiveArea,
     pub tip_click: bool,
-    pub button_scan: Option<u16>,
+    pub button_keys: Option<crate::keys::Combo>,
 }
 
 /// Command-line choices that win over saved settings for this run.
@@ -29,7 +29,7 @@ pub struct LiveConfig {
 pub struct Overrides {
     pub rotation: Option<Rotation>,
     pub tip_click: Option<bool>,
-    pub button_scan: Option<u16>,
+    pub button_keys: Option<crate::keys::Combo>,
 }
 
 pub struct Shared {
@@ -90,7 +90,7 @@ fn build_live(settings: &Settings, overrides: &Overrides, screen_rotation: Rotat
         rotation,
         area: settings.area().resolve(rotation),
         tip_click: overrides.tip_click.unwrap_or(settings.tip_click),
-        button_scan: overrides.button_scan.or_else(|| crate::keys::code_for_name(&settings.button_key)),
+        button_keys: overrides.button_keys.or_else(|| crate::keys::combo_for_name(&settings.button_key)),
     }
 }
 
@@ -305,10 +305,10 @@ mod tests {
 
         let forced = shared(
             Settings { rotation: Some(Rotation::R90), ..Settings::default() },
-            Overrides { rotation: Some(Rotation::R0), tip_click: Some(false), button_scan: Some(0x2c) },
+            Overrides { rotation: Some(Rotation::R0), tip_click: Some(false), button_keys: crate::keys::Combo::new(&[0x2c]) },
         );
         let live = forced.live_config();
-        assert_eq!((live.rotation, live.tip_click, live.button_scan), (Rotation::R0, false, Some(0x2c)));
+        assert_eq!((live.rotation, live.tip_click, live.button_keys), (Rotation::R0, false, crate::keys::Combo::new(&[0x2c])));
     }
 
     #[test]

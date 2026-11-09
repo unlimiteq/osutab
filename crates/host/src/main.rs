@@ -139,7 +139,7 @@ fn parse_args() -> Result<Config, String> {
             }
             "--button-key" => {
                 let name = value()?;
-                c.overrides.button_scan = Some(keys::code_for_name(&name).ok_or(format!("unsupported key {name}"))?);
+                c.overrides.button_keys = Some(keys::combo_for_name(&name).ok_or(format!("unsupported key {name}"))?);
             }
             "--tab" => {
                 let name = value()?;
