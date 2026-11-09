@@ -304,7 +304,8 @@ class MainActivity : Activity() {
         const val RECONNECT_MS = 500L
         const val CONNECT_TIMEOUT_MS = 1000
         const val PC_SILENCE_MS = 6000
-        const val DISCONNECT_GRACE_MS = 1500L
+        // Covers a reconnect, such as when pinning resets the tablet's USB, so the screen doesn't flicker.
+        const val DISCONNECT_GRACE_MS = 4000L
         const val SCREEN_RELEASE_MS = 120_000L
         const val REHIDE_MS = 150L
         const val FULLSCREEN_RETRY_MS = 400L

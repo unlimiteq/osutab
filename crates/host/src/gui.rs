@@ -33,6 +33,9 @@ const PROCESS_CHECK_EVERY: Duration = Duration::from_secs(3);
 const PRECISION_TEST_TIME: Duration = Duration::from_secs(120);
 // How long the tablet app gets to connect before the Play tab says it's missing.
 const APP_GRACE: Duration = Duration::from_secs(8);
+// A dropped tablet that's back within this long isn't shown, so the status doesn't flicker. Pinning
+// the app resets the tablet's USB about a second after it connects, for one.
+const RECONNECT_GRACE: Duration = Duration::from_secs(3);
 // A freeze this long is worth mentioning on the Play tab, for this long after it happened.
 const NOTICEABLE_FREEZE_MS: f32 = 500.0;
 const FREEZE_SHOWN_FOR: Duration = Duration::from_secs(15 * 60);
@@ -212,6 +215,11 @@ fn stretch_percent(px_per_mm: (f64, f64)) -> f64 {
     (px_per_mm.0.max(px_per_mm.1) / px_per_mm.0.min(px_per_mm.1) - 1.0) * 100.0
 }
 
+/// Connected, or only just dropped and likely to be back in a moment.
+fn shown_connected(connected: bool, last_seen_ago: Option<Duration>) -> bool {
+    connected || last_seen_ago.is_some_and(|ago| ago < RECONNECT_GRACE)
+}
+
 /// The tablet app's window. It only lines up with the pen at full screen.
 fn app_check(tablet_connected: bool, app_connected: bool, floating: bool, missing_for: Option<Duration>) -> Option<Check> {
     if !tablet_connected {
@@ -226,7 +234,7 @@ fn app_check(tablet_connected: bool, app_connected: bool, floating: bool, missin
     if !app_connected && missing_for.is_some_and(|d| d >= APP_GRACE) {
         return Some(warn(
             "The tablet app isn't open",
-            "The pen still works. The app shows your pen area: open osu!tab on the tablet.",
+            "The pen still works, but without the app your palm can tap whatever's on the tablet. Open osu!tab on the tablet, or approve the install if the tablet is asking.",
         ));
     }
     None
@@ -550,6 +558,7 @@ struct App {
     otd_area_watch: otd::AreaWatch,
     otd_area: Option<otd::OtdArea>,
     app_missing_since: Option<Instant>,
+    tablet_last_seen: Option<Instant>,
     apps: Vec<&'static str>,
     apps_checked: Option<Instant>,
     precision_ends: Option<Instant>,
@@ -724,8 +733,11 @@ impl App {
             self.otd_elevated = if self.shared.settings().output == Output::OpenTabletDriver { otd::daemon_elevated() } else { None };
             self.apps_checked = Some(Instant::now());
         }
+        if self.shared.connected.load(Ordering::SeqCst) {
+            self.tablet_last_seen = Some(Instant::now());
+        }
         // The app gets a moment to connect before the Play tab says it's missing.
-        let tablet = self.shared.connected.load(Ordering::SeqCst);
+        let tablet = self.tablet_connected();
         if !tablet || self.shared.app_connected.load(Ordering::SeqCst) {
             self.app_missing_since = None;
         } else if self.app_missing_since.is_none() {
@@ -736,9 +748,13 @@ impl App {
         }
     }
 
+    fn tablet_connected(&self) -> bool {
+        shown_connected(self.shared.connected.load(Ordering::SeqCst), self.tablet_last_seen.map(|t| t.elapsed()))
+    }
+
     fn checks(&self) -> Vec<Check> {
         let live = self.shared.live_config();
-        let connected = self.shared.connected.load(Ordering::SeqCst);
+        let connected = self.tablet_connected();
         let mut checks = vec![tablet_check(self.shared.device_state(), connected)];
         checks.extend(lazer_check(self.lazer));
         checks.extend(display_checks(&self.display));
@@ -1041,14 +1057,8 @@ impl App {
     /// Problems come first, and whatever's fine folds down to one line.
     fn play_tab(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette;
-        let mut checks = self.checks();
+        let checks = self.checks();
         let (level, headline) = summary(&checks);
-        if self.shared.connected.load(Ordering::SeqCst) && !self.shared.app_connected.load(Ordering::SeqCst) {
-            checks.push(warn(
-                "Tablet app not showing",
-                "The pen still works. Without the app, your palm can tap whatever's on the tablet. It may be waiting for you to approve the install.",
-            ));
-        }
         let color = if level == CheckLevel::Good { palette.text } else { palette.level(level) };
         ui.label(RichText::new(headline).heading().color(color));
         ui.label(RichText::new(match level {
@@ -1936,6 +1946,7 @@ pub fn run(shared: Arc<Shared>, tab: Tab, exe_dir: PathBuf) -> Result<(), eframe
                 otd_area_watch: otd::AreaWatch::default(),
                 otd_area: None,
                 app_missing_since: None,
+                tablet_last_seen: None,
                 apps: Vec::new(),
                 apps_checked: None,
                 // Started with --test-mode, it stays on until turned off by hand.
@@ -2014,6 +2025,14 @@ mod tests {
         assert!(app_check(true, false, false, soon).is_none(), "it gets a moment to connect");
         assert!(app_check(true, false, false, later).unwrap().title.contains("isn't open"));
         assert!(app_check(true, true, true, None).unwrap().title.contains("full screen"));
+    }
+
+    #[test]
+    fn a_drop_that_comes_back_quickly_does_not_show() {
+        assert!(shown_connected(true, None));
+        assert!(!shown_connected(false, None), "never connected");
+        assert!(shown_connected(false, Some(Duration::from_millis(700))), "pinning's USB reset is back in under a second");
+        assert!(!shown_connected(false, Some(RECONNECT_GRACE)), "a real disconnect shows after the grace");
     }
 
     #[test]

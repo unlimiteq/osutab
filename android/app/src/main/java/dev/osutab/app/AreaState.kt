@@ -29,11 +29,13 @@ data class AreaState(
     val centerY: Double get() = tabletHeight / 2 + offsetY
     val pxPerMm: Double get() = screenWidthPx / width
     val pxPerMmDown: Double get() = screenWidthPx / screenAspect / height
-    val isStretched: Boolean get() = abs(pxPerMm / pxPerMmDown - 1) > 0.01
+    /** True when the area's shape isn't the screen's, so the pen moves faster one way than the other. */
+    val hasTwoSpeeds: Boolean get() = abs(pxPerMm / pxPerMmDown - 1) > 0.01
 
+    /** Says how far the cursor moves. Any shape is fine, so a different one isn't called out. */
     fun sensitivityLabel(): String =
-        if (isStretched) {
-            "Stretched: 1 mm = %.1f px across, %.1f px down".format(pxPerMm, pxPerMmDown)
+        if (hasTwoSpeeds) {
+            "1 mm = %.1f px across, %.1f px down".format(pxPerMm, pxPerMmDown)
         } else {
             "1 mm = %.1f px on screen".format(pxPerMm)
         }

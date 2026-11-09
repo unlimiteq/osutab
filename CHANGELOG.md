@@ -11,11 +11,14 @@ Every version of osu!tab, newest first. Version numbers follow [Semantic Version
 ### Changed
 
 - The side button picker chooses when you let go of a key, not when you press it, so Shift can start a combination or be the key on its own. It shows the keys held so far.
+- The tablet's area label gives both speeds for an area that isn't the screen's shape, without calling it stretched.
+- A tablet connection that drops and comes back within 3 s no longer flashes on the PC, and the tablet app waits 4 s, up from 1.5 s, before saying the PC has gone. Pinning the app resets the tablet's USB about a second after it connects, which showed as a flicker on both.
 - Choosing OpenTabletDriver mode restarts its daemon when osu!tab's plugin or tablet configuration changed, because a running daemon keeps the ones it started with.
 
 ### Fixed
 
 - **In OpenTabletDriver mode the cursor jumped back and forth.** An older osu!tab's "osutab S Pen" configuration made OpenTabletDriver see the S Pen as two tablets, each with its own area, which took turns with the pen. osu!tab now removes any second configuration for the S Pen, and a second tablet can't take the pen while the first is connected.
+- The Play tab warned that the tablet app wasn't showing every time the tablet reconnected, before the app had a chance to.
 
 ## [1.0.0-beta.1] - 2026-11-08
 

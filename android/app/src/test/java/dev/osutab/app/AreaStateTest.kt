@@ -101,13 +101,15 @@ class AreaStateTest {
     }
 
     @Test
-    fun stretchedAreaIsCalledOut() {
-        val stretched = AreaState(width = 88.0, height = 75.2, screenAspect = 1.6, screenWidthPx = 2560.0)
-        assertTrue(stretched.isStretched)
-        assertEquals(29.09, stretched.pxPerMm, 0.01)
-        assertEquals(21.28, stretched.pxPerMmDown, 0.01)
-        assertTrue(stretched.sensitivityLabel().startsWith("Stretched"))
-        assertTrue(!area.isStretched)
+    fun anAreaOfAnotherShapeGivesBothSpeedsWithoutAWarning() {
+        val other = AreaState(width = 88.0, height = 75.2, screenAspect = 1.6, screenWidthPx = 2560.0)
+        assertTrue(other.hasTwoSpeeds)
+        assertEquals(29.09, other.pxPerMm, 0.01)
+        assertEquals(21.28, other.pxPerMmDown, 0.01)
+        assertEquals("1 mm = 29.1 px across, 21.3 px down", other.sensitivityLabel())
+        assertTrue(!other.sensitivityLabel().contains("Stretch"))
+        assertTrue(!area.hasTwoSpeeds)
+        assertEquals("1 mm = %.1f px on screen".format(area.pxPerMm), area.sensitivityLabel())
     }
 
     @Test

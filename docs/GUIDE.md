@@ -171,6 +171,7 @@ What hasn't been tested: the S Pen itself in this mode, and any community plugin
 | OpenTabletDriver mode doesn't start | Install the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). |
 | "OpenTabletDriver has no pen area for the S Pen yet" | Open OpenTabletDriver, pick osu!tab S Pen, and set an area in Absolute Mode. |
 | In OpenTabletDriver mode the cursor jumps back and forth | OpenTabletDriver has the S Pen twice, usually because an older osu!tab added a second "osutab S Pen". This version removes it and restarts OpenTabletDriver when you pick its mode. Don't run an older copy of osu!tab, which adds it back. |
+| The connection drops for a few seconds now and then | Use Direct USB on the Settings tab: it reconnects in about 0.3 s, against about 5 s through adb.exe. A drop that's back within 3 s isn't shown. |
 
 ## How it works
 

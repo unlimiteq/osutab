@@ -205,7 +205,7 @@ More, including osu!stable and Windows, is in the [guide](docs/GUIDE.md#osu-sett
 
 - While osu!tab runs, it holds the pen, so the pen doesn't work on the tablet itself. Quit osu!tab to give it back.
 - Android's palm rejection is off while osu!tab holds the pen, but the tablet app takes every touch.
-- Android doesn't let an ordinary app block the system bars completely. A swipe from the edge can bring them back for a moment, and **Pin the app** blocks Home and Back. When it pins the app, Android resets the USB connection once, and osu!tab reconnects within a second.
+- Android doesn't let an ordinary app block the system bars completely. A swipe from the edge can bring them back for a moment, and **Pin the app** blocks Home and Back. When it pins the app, Android resets the USB connection once. osu!tab reconnects by itself, and a drop that's back within 3 s isn't shown, so the status doesn't flicker.
 - Quitting osu!tab also closes the tablet app.
 - USB debugging gives a connected PC deep access to the tablet, so only allow PCs you trust.
 
@@ -220,6 +220,7 @@ More, including osu!stable and Windows, is in the [guide](docs/GUIDE.md#osu-sett
 | Occasional stutters | Close background apps. The Play tab says which program was in front. |
 | OpenTabletDriver mode doesn't start | Install the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). |
 | The cursor jumps back and forth in OpenTabletDriver mode | An older osu!tab added a second S Pen tablet. This version removes it and restarts OpenTabletDriver when you pick its mode. Don't run an older copy, which adds it back. |
+| The connection drops for a few seconds now and then | Use Direct USB on the Settings tab. It reconnects in about 0.3 s, against about 5 s through adb.exe. |
 
 The [guide](docs/GUIDE.md#troubleshooting) has more.
 
