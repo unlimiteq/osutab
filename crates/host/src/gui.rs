@@ -44,7 +44,6 @@ const NAV_FADE: f32 = 0.1;
 const STATUS_FADE: f32 = 0.2;
 const GLIDE: f32 = 0.15;
 const GLIDE_WINDOW: Duration = Duration::from_millis(200);
-const NEXT_CONNECT: &str = "Applies the next time the tablet connects.";
 
 const SEMIBOLD: &str = "semibold";
 const SIDEBAR_WIDTH: f32 = 196.0;
@@ -1102,7 +1101,7 @@ impl App {
             }
         });
         let closing = if self.shared.settings().close_to_tray {
-            "Closing this window keeps osu!tab running in the tray. Quit gives the pen back to Android."
+            "Closing this window keeps osu!tab running in the tray. Quit gives the pen back to Android and closes the tablet app."
         } else {
             "Closing this window quits osu!tab and gives the pen back to Android."
         };
@@ -1665,7 +1664,7 @@ impl App {
                 }
             });
             divider(ui);
-            app.toggle_row(ui, "Open the app on connect", NEXT_CONNECT, s.open_tablet_app, d.open_tablet_app, |st, on| st.open_tablet_app = on);
+            app.toggle_row(ui, "Open the app on connect", "Opens it when the tablet connects, and closes it when osu!tab quits. Applies the next time the tablet connects.", s.open_tablet_app, d.open_tablet_app, |st, on| st.open_tablet_app = on);
             divider(ui);
             app.toggle_row(ui, "Pin the app", "Blocks Home and Back. Applies the next time the tablet connects.", s.screen_pinning, d.screen_pinning, |st, on| st.screen_pinning = on);
             if s.screen_pinning {

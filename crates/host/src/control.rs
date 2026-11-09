@@ -18,6 +18,10 @@ const POLL: Duration = Duration::from_millis(30);
 const SAVE_DELAY: Duration = Duration::from_millis(500);
 // Long enough for a busy tablet, and short enough that a dead connection gets noticed.
 const WRITE_TIMEOUT: Duration = Duration::from_secs(1);
+/// The app hears from the PC at least this often, even when nothing changes. It takes a longer
+/// silence to mean the PC has gone, which it can't otherwise tell when osu!tab was ended or the PC
+/// went to sleep with the cable still in.
+const HEARTBEAT: Duration = Duration::from_secs(2);
 
 fn rotation_degrees(rotation: Rotation) -> u32 {
     match rotation {
@@ -140,6 +144,7 @@ fn serve(stream: TcpStream, shared: &Shared, id: u64, newest: &AtomicU64) -> io:
     let mut sent_prefs = String::new();
     let mut unsaved_since: Option<Instant> = None;
     let mut otd_area = otd::AreaWatch::default();
+    let mut last_ping = Instant::now();
 
     while !shared.stats.stop.load(Ordering::SeqCst) && newest.load(Ordering::SeqCst) == id {
         let settings = shared.settings();
@@ -169,6 +174,10 @@ fn serve(stream: TcpStream, shared: &Shared, id: u64, newest: &AtomicU64) -> io:
         if sent_outline != Some(outline) {
             writer.write_all(if outline { b"outline 1\n" } else { b"outline 0\n" })?;
             sent_outline = Some(outline);
+        }
+        if last_ping.elapsed() >= HEARTBEAT {
+            writer.write_all(b"ping\n")?;
+            last_ping = Instant::now();
         }
 
         match reader.read_line(&mut line) {
@@ -300,6 +309,35 @@ mod tests {
             newest.store(2, Ordering::SeqCst);
             std::thread::sleep(Duration::from_millis(200));
             assert!(ending.is_finished());
+        });
+    }
+
+    #[test]
+    fn the_app_hears_from_the_pc_even_when_nothing_changes() {
+        use crate::mapping::Rect;
+        use crate::shared::Overrides;
+        let target = Rect { left: 0.0, top: 0.0, width: 2560.0, height: 1600.0 };
+        let shared = Shared::new(Settings::default(), std::path::PathBuf::new(), Overrides::default(), target, true);
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let app = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        app.set_read_timeout(Some(HEARTBEAT * 2)).unwrap();
+        let (stream, _) = listener.accept().unwrap();
+        let newest = AtomicU64::new(1);
+        std::thread::scope(|scope| {
+            scope.spawn(|| serve(stream, &shared, 1, &newest));
+            let started = Instant::now();
+            let mut reader = BufReader::new(&app);
+            let mut line = String::new();
+            let mut pinged = false;
+            while !pinged && started.elapsed() < HEARTBEAT * 2 {
+                line.clear();
+                if reader.read_line(&mut line).is_err() {
+                    break;
+                }
+                pinged = line == "ping\n";
+            }
+            newest.store(2, Ordering::SeqCst);
+            assert!(pinged, "no ping within {:?}", HEARTBEAT * 2);
         });
     }
 

@@ -321,21 +321,29 @@ fn fatal(message: &str) -> ! {
     std::process::exit(2);
 }
 
-/// Unpins the tablet app after the session that pinned it has already ended, such as after a drop.
-/// This used to start adb.exe and leave it running, and the next start then found the tablet taken.
-fn unpin_at_exit(shared: &Shared, adb: &Adb) {
+/// Unpins and closes the tablet app as osu!tab quits, if the session didn't get to do it, such as
+/// after a drop. Unpinning used to start adb.exe and leave it running, and the next start then
+/// found the tablet taken.
+fn tidy_tablet_at_exit(shared: &Shared, adb: &Adb) {
+    let pinned = shared.pinned.load(Ordering::SeqCst);
+    let Some(command) = adb::closing_command(pinned, shared.app_opened.load(Ordering::SeqCst)) else { return };
     match usbadb::adb_interface() {
         usbadb::AdbInterface::Nothing => {}
         usbadb::AdbInterface::Tablet
             if adbkey::key_dir()
                 .and_then(|dir| adbkey::load_or_create(&dir).ok())
-                .is_some_and(|key| usbadb::DirectLink::run_once(&key, adb::UNPIN_COMMAND).is_ok()) => {}
+                .is_some_and(|key| usbadb::DirectLink::run_once(&key, &command).is_ok()) => {}
         _ => {
+            let running = adb::server_running();
+            // Starting adb.exe takes seconds, which only unpinning is worth.
+            if !running && !pinned {
+                return;
+            }
             // Stopped again straight after, below, unless it was already running for something else.
-            if !adb::server_running() {
+            if !running {
                 shared.adb_started_here.store(true, Ordering::SeqCst);
             }
-            let _ = adb.unpin_app();
+            let _ = adb.run(&command);
         }
     }
 }
@@ -493,9 +501,7 @@ fn main() {
                 std::thread::sleep(Duration::from_millis(10));
             }
             // Normally done already, by the session as it closed.
-            if shared.pinned.load(Ordering::SeqCst) {
-                unpin_at_exit(&shared, &adb_at_exit);
-            }
+            tidy_tablet_at_exit(&shared, &adb_at_exit);
             // A server that was already running belongs to something else, so it stays running.
             if shared.adb_started_here.load(Ordering::SeqCst) {
                 let _ = adb_at_exit.kill_server();

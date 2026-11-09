@@ -130,6 +130,7 @@ fn prepare_tablet_app(adb: &Adb, apk: &std::path::Path, shared: &Shared, reverse
         adb.ensure_app(apk)?;
         if open && settings.open_tablet_app {
             adb.start_app()?;
+            shared.app_opened.store(true, Ordering::SeqCst);
         }
         if settings.screen_pinning && !shared.pinned.load(Ordering::SeqCst) {
             std::thread::sleep(PIN_SETTLE);
@@ -334,7 +335,8 @@ fn pump<L: PenLink>(link: &mut L, hello: &Hello, injector: &mut Injector, shared
 
                 if direct {
                     injector.apply(&s, u, v, live.tip_click, live.button_scan);
-                } else {
+                } else if !injector.dry_run {
+                    // OpenTabletDriver would move the cursor, which a dry run mustn't.
                     let (x, y) = otd::landscape_coordinates(s.x, s.y, hello.max_x, hello.max_y, live.rotation);
                     shared.relay.send(&DownFrame::Sample(Sample { x, y, ..s }).encode());
                 }
@@ -498,15 +500,17 @@ fn tablet_command(open_app: bool, pin: bool, unpin: bool) -> Option<String> {
 fn start_quickly(options: &EngineOptions, shared: &Shared, key: &AdbKey, open_app: bool) -> Result<QuickStarted, QuickStartError> {
     let mut stamps = vec![adb::helper_stamp(&options.helper)?];
     let mut command = None;
+    let mut opening = false;
     let mut pin = false;
     let mut unpin = false;
     let settings = shared.settings();
     if let Some(apk) = &options.app {
         stamps.push(adb::app_stamp(apk)?);
         let pinned = shared.pinned.load(Ordering::SeqCst);
+        opening = open_app && settings.open_tablet_app;
         pin = settings.screen_pinning && !pinned;
         unpin = !settings.screen_pinning && pinned;
-        command = tablet_command(open_app && settings.open_tablet_app, pin, unpin);
+        command = tablet_command(opening, pin, unpin);
     }
     let helper_args = direct_helper_args(options);
     let plan = QuickStart {
@@ -527,6 +531,9 @@ fn start_quickly(options: &EngineOptions, shared: &Shared, key: &AdbKey, open_ap
     let started = DirectLink::start_quick(&plan, key, &mut waiting)?;
     if pin || unpin {
         shared.pinned.store(pin, Ordering::SeqCst);
+    }
+    if opening {
+        shared.app_opened.store(true, Ordering::SeqCst);
     }
     if let Some(rotation) = started.rotation {
         shared.set_screen_rotation(rotation);
@@ -550,8 +557,12 @@ fn run_direct_link(mut link: DirectLink, hello: &Hello, options: &EngineOptions,
     let result = pump(&mut link, hello, injector, shared, options, recorder);
     shared.connected.store(false, Ordering::SeqCst);
     // Quitting while the tablet is still here, so this saves starting adb.exe just to do it.
-    if shared.stats.stop.load(Ordering::SeqCst) && shared.pinned.load(Ordering::SeqCst) && link.run_before_closing(adb::UNPIN_COMMAND).is_ok() {
-        shared.pinned.store(false, Ordering::SeqCst);
+    if shared.stats.stop.load(Ordering::SeqCst) {
+        let command = adb::closing_command(shared.pinned.load(Ordering::SeqCst), shared.app_opened.load(Ordering::SeqCst));
+        if command.is_some_and(|command| link.run_before_closing(&command).is_ok()) {
+            shared.pinned.store(false, Ordering::SeqCst);
+            shared.app_opened.store(false, Ordering::SeqCst);
+        }
     }
     // Closes the stream, which makes the helper exit and gives the pen back straight away.
     link.close();

@@ -326,6 +326,7 @@ pub fn to_text(s: &Settings) -> String {
          show_area_label = {}\n\
          hold_to_edit_seconds = {}\n\
          edit_timeout_seconds = {}\n\
+         # Opens the tablet app when the tablet connects, and closes it when osu!tab quits.\n\
          open_tablet_app = {}\n\
          # Blocks Home and Back on the tablet. Leaving it sends the tablet to its lock screen.\n\
          screen_pinning = {}\n\

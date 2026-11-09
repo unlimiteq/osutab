@@ -59,6 +59,8 @@ pub struct Shared {
     pub usb3_link: AtomicBool,
     /// True once this program has pinned the tablet app.
     pub pinned: AtomicBool,
+    /// True once this program has opened the tablet app, so it closes it again when it quits.
+    pub app_opened: AtomicBool,
     /// Something to tell the person, such as a settings file that had problems.
     pub notice: Mutex<Option<String>>,
     /// Why direct USB isn't in use, when it was asked for.
@@ -121,6 +123,7 @@ impl Shared {
             direct_active: AtomicBool::new(false),
             usb3_link: AtomicBool::new(false),
             pinned: AtomicBool::new(false),
+            app_opened: AtomicBool::new(false),
             notice: Mutex::new(None),
             direct_problem: Mutex::new(None),
             device_state: AtomicU8::new(DeviceState::NoDevice as u8),

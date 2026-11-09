@@ -34,11 +34,12 @@ class MainActivity : Activity() {
 
     // A brief drop shouldn't flash the screen, so the waiting message only shows after this.
     private val showDisconnected = Runnable { view.connected = false }
+    // Once the PC has been gone a while, the screen may turn off as usual instead of staying lit.
+    private val releaseScreen = Runnable { window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON) }
     private val hideBars = Runnable { hideSystemBars() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // Shows above the lock screen, so a palm has nothing else to touch and no PIN is needed to
         // play. The lock itself stays on: leaving this app still asks for the PIN.
         setShowWhenLocked(true)
@@ -173,7 +174,10 @@ class MainActivity : Activity() {
     /** Runs on the main thread. A connection only counts once the PC has really said something. */
     private fun onPcSpoke() {
         main.removeCallbacks(showDisconnected)
+        main.removeCallbacks(releaseScreen)
         view.connected = true
+        // The pen doesn't count as using the tablet, so without this the screen would turn off mid-game.
+        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         // A new connection starts with nothing sent, so the PC hears this again.
         reportedFloating = null
         reportWindow()
@@ -191,6 +195,8 @@ class MainActivity : Activity() {
     private fun onPcGone() {
         main.removeCallbacks(showDisconnected)
         main.postDelayed(showDisconnected, DISCONNECT_GRACE_MS)
+        main.removeCallbacks(releaseScreen)
+        main.postDelayed(releaseScreen, SCREEN_RELEASE_MS)
     }
 
     private fun handleLine(line: String) {
@@ -240,6 +246,9 @@ class MainActivity : Activity() {
                         socket = s
                         s.tcpNoDelay = true
                         s.connect(InetSocketAddress("127.0.0.1", PC_PORT), CONNECT_TIMEOUT_MS)
+                        // The PC says something every 2 s, so a longer silence means it has gone,
+                        // even when the cable keeps this connection open.
+                        s.soTimeout = PC_SILENCE_MS
                         val reader = BufferedReader(InputStreamReader(s.getInputStream()))
                         val writer = BufferedWriter(OutputStreamWriter(s.getOutputStream()))
                         val sender = startSender(writer)
@@ -250,7 +259,7 @@ class MainActivity : Activity() {
                                     spoke = true
                                     main.post { onPcSpoke() }
                                 }
-                                main.post { handleLine(line) }
+                                if (line != "ping") main.post { handleLine(line) }
                             }
                         } finally {
                             sender.interrupt()
@@ -294,7 +303,9 @@ class MainActivity : Activity() {
         const val PC_PORT = 27192
         const val RECONNECT_MS = 500L
         const val CONNECT_TIMEOUT_MS = 1000
+        const val PC_SILENCE_MS = 6000
         const val DISCONNECT_GRACE_MS = 1500L
+        const val SCREEN_RELEASE_MS = 120_000L
         const val REHIDE_MS = 150L
         const val FULLSCREEN_RETRY_MS = 400L
         const val SAVED_THEME = "theme"

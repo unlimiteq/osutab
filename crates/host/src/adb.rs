@@ -92,10 +92,13 @@ pub fn open_app_command() -> String {
     format!("{} 2>&1 | grep -q Error && rm -f {APP_STAMP}", start_app_command())
 }
 
-/// Starts the app full screen. A tablet in its desktop mode would otherwise open it in a floating
-/// window, where the area it draws doesn't line up with the pen.
+/// Starts the app afresh and full screen. A tablet in its desktop mode would otherwise open it in a
+/// floating window, where the area it draws doesn't line up with the pen. Afresh (`-S`) matters if
+/// the app is still open from before and the tablet locked while it showed: the lock screen then
+/// keeps the focus and shows the status and navigation bars over the app, and bringing the app
+/// forward doesn't change that. A new start does.
 fn start_app_command() -> String {
-    format!("am start --windowingMode {FULLSCREEN_WINDOWING_MODE} -n {APP_PACKAGE}/.MainActivity")
+    format!("am start -S --windowingMode {FULLSCREEN_WINDOWING_MODE} -n {APP_PACKAGE}/.MainActivity")
 }
 
 /// The tablet command that pins the app once it's showing, for the same job as `Adb::pin_app`.
@@ -107,6 +110,17 @@ pub fn pin_app_command() -> String {
 }
 
 pub const UNPIN_COMMAND: &str = "cmd activity task lock stop";
+
+/// What the tablet runs as osu!tab quits. If osu!tab opened the app, it closes it, so the app
+/// doesn't sit there keeping the screen on. Closing it also ends pinning, which sends the tablet
+/// to its lock screen as unpinning does.
+pub fn closing_command(pinned: bool, app_opened: bool) -> Option<String> {
+    if app_opened {
+        Some(format!("am force-stop {APP_PACKAGE}"))
+    } else {
+        pinned.then(|| UNPIN_COMMAND.to_string())
+    }
+}
 
 /// Whether an adb server is listening on its standard port. This takes up to 200 ms when there
 /// isn't one, so it's only for when adb.exe is about to be needed anyway.
@@ -217,7 +231,12 @@ impl Adb {
 
     /// On this tablet, this also sends it to its lock screen.
     pub fn unpin_app(&self) -> io::Result<()> {
-        self.output(&["shell", UNPIN_COMMAND]).map(|_| ())
+        self.run(UNPIN_COMMAND)
+    }
+
+    /// Runs a command on the tablet and waits for it to finish.
+    pub fn run(&self, command: &str) -> io::Result<()> {
+        self.output(&["shell", command]).map(|_| ())
     }
 
     pub fn spawn_helper(&self, args: &str) -> io::Result<Child> {
@@ -264,6 +283,19 @@ pub fn parse_rotation(dump: &str) -> Option<Rotation> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_app_starts_afresh_and_full_screen() {
+        assert!(open_app_command().starts_with("am start -S --windowingMode 1 -n dev.osutab.app/.MainActivity 2>&1"), "{}", open_app_command());
+    }
+
+    #[test]
+    fn quitting_closes_the_app_osutab_opened_which_also_unpins_it() {
+        assert_eq!(closing_command(true, true).as_deref(), Some("am force-stop dev.osutab.app"));
+        assert_eq!(closing_command(false, true).as_deref(), Some("am force-stop dev.osutab.app"));
+        assert_eq!(closing_command(true, false).as_deref(), Some(UNPIN_COMMAND));
+        assert_eq!(closing_command(false, false), None);
+    }
 
     #[test]
     fn the_pin_command_finds_the_app_the_same_way() {
