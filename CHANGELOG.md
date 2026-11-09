@@ -2,6 +2,12 @@
 
 Every version of osu!tab, newest first. Version numbers follow [Semantic Versioning](https://semver.org).
 
+## [Unreleased]
+
+### Added
+
+- **Filters without OpenTabletDriver.** Direct output has two smoothing filters on the Pen area tab, both off by default: radial follow, with the same settings as OpenTabletDriver's Radial Follow Smoothing, and time smoothing, an average over a set number of milliseconds that's timed by the tablet's own report times. Both start over when the pen leaves range, and changes apply straight away.
+
 ## [1.0.0-beta.1] - 2026-11-08
 
 The first public beta, and the first version called osu!tab. The download has everything it needs, with nothing to fetch from Google.
@@ -76,6 +82,7 @@ The first complete version, then called osutab, built from 2026-10-30.
 
 The program reported 0.1.0 until 1.0.0-beta.1. The 0.2.0 and 0.3.0 tags were added afterwards, to mark those milestones in the history.
 
+[Unreleased]: https://github.com/unlimiteq/osu-tab/compare/v1.0.0-beta.1...HEAD
 [1.0.0-beta.1]: https://github.com/unlimiteq/osu-tab/compare/v0.3.0...v1.0.0-beta.1
 [0.3.0]: https://github.com/unlimiteq/osu-tab/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/unlimiteq/osu-tab/compare/v0.1.0...v0.2.0

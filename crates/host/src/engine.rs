@@ -12,6 +12,7 @@ use osutab_core::*;
 use crate::adb::{self, Adb, DeviceState};
 use crate::adbkey::{self, AdbKey};
 use crate::control;
+use crate::filters::Filters;
 use crate::inject::{self, Injector};
 use crate::mapping::{to_unit, Rotation};
 use crate::otd;
@@ -302,6 +303,7 @@ fn pump<L: PenLink>(link: &mut L, hello: &Hello, injector: &mut Injector, shared
     let mut generation = shared.live_generation();
     let mut live: LiveConfig = shared.live_config();
     let mut previous_exact = None;
+    let mut filters = Filters::default();
     loop {
         link.next_frame(&mut buf, shared)?;
         let now = clock.elapsed();
@@ -328,7 +330,9 @@ fn pump<L: PenLink>(link: &mut L, hello: &Hello, injector: &mut Injector, shared
                     (now.as_nanos() as i64 - on_host) as f32 / 1e6
                 });
                 let (tablet_u, tablet_v) = to_unit(s.x, s.y, hello.max_x, hello.max_y, live.rotation);
-                let (u, v) = live.area.map(tablet_u, tablet_v);
+                // Direct output only, and before the area clamps the position to its edges.
+                let (filtered_u, filtered_v) = filters.apply(&live, s.flags, s.timestamp_ns, tablet_u, tablet_v);
+                let (u, v) = live.area.map(filtered_u, filtered_v);
                 let direct = live.output == Output::Direct;
                 let testing = direct && shared.test_mode.load(Ordering::Relaxed) && !injector.dry_run;
                 let before = if testing { inject::cursor_position() } else { (0, 0) };

@@ -382,6 +382,7 @@ mod tests {
             area: settings.area().resolve(Rotation::R90),
             tip_click: true,
             button_scan: None,
+            filters: Default::default(),
         };
         let line = state_line(&settings, &live, 2560.0, 1.6);
         assert!(line.ends_with('\n'));
