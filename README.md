@@ -101,6 +101,7 @@ Get **`osu-tab-1.0.0-beta.1-windows-x64.zip`** from the [Releases](https://githu
 | `osu!tab.exe` | The program. The tablet helper and tablet app are built in. |
 | `otd\` | OpenTabletDriver, used only in OpenTabletDriver mode. |
 | `README.md`, `CHANGELOG.md`, `docs\` | This page, the changelog and the full guide. |
+| `LICENSE` | osu!tab's license, MIT. |
 | `LICENSE-Geist-font.txt` | The license for the font both apps use. |
 
 > [!NOTE]
@@ -257,4 +258,4 @@ osu!tab is an independent project. It isn't affiliated with or endorsed by ppy, 
 
 ## License
 
-osu!tab doesn't have a license yet, so all rights are reserved for now. The third-party parts above keep their own licenses.
+osu!tab is under the [MIT License](LICENSE): you can use, change and share it, as long as the copyright notice stays with it. The third-party parts above keep their own licenses.

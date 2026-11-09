@@ -6,6 +6,7 @@ Every version of osu!tab, newest first. Version numbers follow [Semantic Version
 
 ### Added
 
+- osu!tab is now under the MIT License.
 - **The side button can press up to three keys together**, such as Shift + 2 for `!`, or Shift + Alt + 2 for a hotkey. Hold the keys down, then let go. Ctrl, Shift, Alt and Win go first, and the keys are let go in reverse. `--button-key` takes the same, such as `"left shift + 2"`.
 
 ### Changed

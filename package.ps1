@@ -14,7 +14,7 @@ Remove-Item -Recurse -Force $dist -ErrorAction SilentlyContinue
 New-Item -ItemType Directory -Force $dist | Out-Null
 # Cargo can't name a program with a "!", so the exe gets its real name here.
 Copy-Item (Join-Path $PSScriptRoot 'target\release\osutab.exe') (Join-Path $dist 'osu!tab.exe') -Force
-foreach ($file in 'README.md', 'CHANGELOG.md') {
+foreach ($file in 'README.md', 'CHANGELOG.md', 'LICENSE') {
   Copy-Item (Join-Path $PSScriptRoot $file) $dist -Force
 }
 Copy-Item (Join-Path $PSScriptRoot 'docs') $dist -Recurse -Force

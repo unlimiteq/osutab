@@ -2,3 +2,4 @@
 name = "osutab-core"
 version = "1.0.0-beta.1"
 edition = "2021"
+license = "MIT"
