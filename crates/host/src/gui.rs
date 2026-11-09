@@ -15,6 +15,7 @@ use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use winit::platform::windows::EventLoopBuilderExtWindows;
 
 use crate::adb::DeviceState;
+use crate::filters::{self, FilterSettings};
 use crate::keys::KeyCapture;
 use crate::lazer::{self, LazerDisplay, LazerInput};
 use crate::mapping::{Rotation, TABLET_PX_PER_MM};
@@ -835,7 +836,7 @@ impl App {
             }
         }
         if output == Output::Direct {
-            hint(ui, "Straight to the cursor. The fastest path, with no Windows Ink, filters or other programs.", &self.palette);
+            hint(ui, "Straight to the cursor. The fastest path, with no Windows Ink or other programs. Its own smoothing is on the Pen area tab.", &self.palette);
         } else {
             hint(ui, "Sends the pen through OpenTabletDriver, so its filters and plugins work. It sets the area itself.", &self.palette);
             if let Some(dir) = otd::program_dir(&self.exe_dir) {
@@ -1197,6 +1198,7 @@ impl App {
             section_title(ui, "Tablet and pen");
             app.pen_options(ui);
         });
+        self.card(ui, |app, ui| app.filter_options(ui));
     }
 
     fn position_fields(&mut self, ui: &mut egui::Ui) {
@@ -1351,6 +1353,58 @@ impl App {
             let color = if flags & osutab_core::FLAG_TOUCH != 0 { self.palette.accent } else { self.palette.text };
             painter.circle_filled(at(u * tablet_w, v * tablet_h), 4.0, color);
         }
+    }
+
+    /// Smoothing for direct output. Only on the Pen area tab in direct mode, because
+    /// OpenTabletDriver mode uses OpenTabletDriver's filters.
+    fn filter_options(&mut self, ui: &mut egui::Ui) {
+        let palette = self.palette;
+        let (f, d) = (self.shared.settings().filters, FilterSettings::default());
+        section_title(ui, "Filters");
+        hint(ui, "Smoothing for a shaky hand, without OpenTabletDriver. Each one adds a little delay, so both start off.", &palette);
+        self.toggle_row(ui, "Radial follow", "Holds the cursor still through small wobbles, and follows bigger moves quickly. The same settings as OpenTabletDriver's Radial Follow Smoothing.", f.radial.on, d.radial.on, |s, on| s.filters.radial.on = on);
+        if f.radial.on {
+            let (r, rd) = (f.radial, d.radial);
+            ui.indent("radial_follow", |ui| {
+                self.filter_number(ui, "Outer radius", "The furthest the cursor can trail the pen.", (r.outer_radius_mm, rd.outer_radius_mm), |v| egui::DragValue::new(v).range(filters::RADIUS_MM).speed(0.01).max_decimals(2).suffix(" mm"), |s, v| {
+                    s.filters.radial.outer_radius_mm = v;
+                    s.filters.radial.inner_radius_mm = s.filters.radial.inner_radius_mm.min(v);
+                });
+                self.filter_number(ui, "Inner radius", "Pen moves smaller than this don't move the cursor. Up to the outer radius.", (r.inner_radius_mm, rd.inner_radius_mm), |v| egui::DragValue::new(v).range(filters::RADIUS_MM).speed(0.01).max_decimals(2).suffix(" mm"), |s, v| {
+                    s.filters.radial.inner_radius_mm = v.min(s.filters.radial.outer_radius_mm);
+                });
+                self.filter_number(ui, "Smoothing", "Higher is smoother, but slower to settle on the pen.", (r.smoothing, rd.smoothing), |v| egui::DragValue::new(v).range(filters::SMOOTHING).speed(0.002).max_decimals(4), |s, v| s.filters.radial.smoothing = v);
+                self.filter_number(ui, "Soft knee", "Higher eases the change from smoothing to following at the outer radius.", (r.soft_knee, rd.soft_knee), |v| egui::DragValue::new(v).range(filters::SOFT_KNEE).speed(0.05).max_decimals(2), |s, v| s.filters.radial.soft_knee = v);
+                self.filter_number(ui, "Leak", "Lets some smoothing carry on past the outer radius. At 0, the cursor never trails further than it.", (r.leak, rd.leak), |v| egui::DragValue::new(v).range(filters::LEAK).speed(0.005).max_decimals(2), |s, v| s.filters.radial.leak = v);
+            });
+        }
+        divider(ui);
+        self.toggle_row(ui, "Time smoothing", "Averages the pen's position over a short time, for steadier lines. Slow moves trail the pen by about the smoothing time.", f.time.on, d.time.on, |s, on| s.filters.time.on = on);
+        if f.time.on {
+            ui.indent("time_smoothing", |ui| {
+                self.filter_number(ui, "Smoothing time", "The cursor catches up about two-thirds of a move in this time.", (f.time.ms, d.time.ms), |v| egui::DragValue::new(v).range(filters::TIME_MS).speed(0.1).max_decimals(1).suffix(" ms"), |s, v| s.filters.time.ms = v);
+            });
+        }
+        if f.radial.on && f.time.on {
+            hint(ui, "With both on, time smoothing comes first.", &palette);
+        }
+    }
+
+    /// One filter setting: a number to drag or type, like the area's, and a reset when it's off
+    /// its default.
+    fn filter_number(&mut self, ui: &mut egui::Ui, title: &str, explanation: &str, (current, default): (f64, f64), field: fn(&mut f64) -> egui::DragValue<'_>, set: fn(&mut Settings, f64)) {
+        self.setting_row(ui, title, explanation, |app, ui| {
+            let palette = app.palette;
+            let mut value = current;
+            if ui.add(field(&mut value)).changed() {
+                app.shared.update_settings(|s| set(s, value));
+                app.changed();
+            }
+            if reset_button(ui, current != default, &palette) {
+                app.shared.update_settings(|s| set(s, default));
+                app.changed();
+            }
+        });
     }
 
     fn latency_tab(&mut self, ui: &mut egui::Ui) {

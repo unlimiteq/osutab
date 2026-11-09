@@ -107,6 +107,15 @@ The whole tablet is about 314 x 196 mm. Mapped to a 2560 x 1600 screen, that's 8
 
 **Lock to screen shape** keeps the area's shape the same as your screen's, so the same movement goes as far across as up and down. Turn it off if you prefer a stretched area. Give your hand some room by keeping the area away from the tablet's edges.
 
+### Filters
+
+The **Pen area** tab has two smoothing filters for direct output, so a shaky hand doesn't need OpenTabletDriver. Both start off, because each adds some delay. Changes apply straight away, and both start over each time the pen leaves range, so the cursor never slides in from where you lifted the pen.
+
+- **Radial follow** holds the cursor still through small wobbles and follows bigger moves quickly. Its settings are the ones in OpenTabletDriver's Radial Follow Smoothing plugin, in tablet millimetres: the cursor trails the pen by at most the **outer radius** (1 mm by default), and ignores moves within the **inner radius** (0 mm). **Smoothing** (0.95) is how much of the remaining distance each report keeps, so higher is smoother but slower to settle. **Soft knee** (1) eases the change at the outer radius, and **leak** (0) lets some smoothing carry on past it. Smoothing works per report, like the plugin's, so values you used through OpenTabletDriver with this tablet feel the same here. It's written from the plugin's description, so its curve can differ slightly.
+- **Time smoothing** averages the pen's position over a short time (5 ms by default). The cursor catches up about two-thirds of a move in that time, and slow moves trail the pen by about that much. It's timed by the tablet's own report times, so it feels the same however often the pen reports.
+
+With both on, time smoothing runs first. In OpenTabletDriver mode these are hidden and OpenTabletDriver's own filters apply.
+
 ## osu! settings
 
 ### osu!lazer (tested)
@@ -137,7 +146,7 @@ Choose the output on the **Play** tab:
 
 | Output | Path | Use it for |
 |---|---|---|
-| **Direct** (default) | Pen > osu!tab > `SendInput` | The lowest latency. Filters and plugins don't apply. |
+| **Direct** (default) | Pen > osu!tab > `SendInput` | The lowest latency, with osu!tab's own [filters](#filters) if you want them. OpenTabletDriver's filters and plugins don't apply. |
 | **OpenTabletDriver** | Pen > osu!tab > local socket > OpenTabletDriver > its filters > its output | OpenTabletDriver's filters and plugins. It sets the area, filters and buttons in this mode, not osu!tab. |
 
 osu!tab includes its own copy of OpenTabletDriver and a bridge plugin that presents the S Pen to it as a tablet called "osu!tab S Pen". It needs the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). It uses your normal `%LOCALAPPDATA%\OpenTabletDriver` folder, and only touches it once you choose this output: it adds the tablet's configuration, and backs up OpenTabletDriver's settings as `settings.before-osu!tab.json` before changing them. A profile from before the rename, under "osutab S Pen", carries over with its area. Install community plugins with OpenTabletDriver's Plugin Manager.

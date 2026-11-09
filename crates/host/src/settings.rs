@@ -4,6 +4,7 @@ use std::fs;
 use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
+use crate::filters::{self, FilterSettings, MAX_RADIUS_MM, MAX_SOFT_KNEE, MAX_TIME_MS, MIN_SMOOTHING, MIN_TIME_MS};
 use crate::mapping::{AreaMm, Rotation, TABLET_LONG_MM, TABLET_SHORT_MM};
 use crate::theme::{self, Rgb, Theme, ThemeOverrides, DEFAULT_THEME, MAX_THICKNESS, MIN_THICKNESS};
 
@@ -104,6 +105,8 @@ pub struct Settings {
     pub open_tablet_app: bool,
     pub screen_pinning: bool,
     pub usb_path: UsbPath,
+    /// Smoothing for direct output.
+    pub filters: FilterSettings,
 }
 
 fn full_area() -> AreaMm {
@@ -133,6 +136,7 @@ impl Default for Settings {
             open_tablet_app: true,
             screen_pinning: false,
             usb_path: UsbPath::Direct,
+            filters: FilterSettings::default(),
         }
     }
 }
@@ -338,6 +342,24 @@ pub fn to_text(s: &Settings) -> String {
          # usb_path: adb, direct. Direct stops adb.exe while osu!tab runs.\n\
          usb_path = {}\n\
          \n\
+         # Smoothing for direct output. OpenTabletDriver mode uses OpenTabletDriver's filters instead.\n\
+         # Radial follow holds the cursor still through small wobbles, and follows bigger moves.\n\
+         radial_follow = {}\n\
+         # In mm, from 0 to {MAX_RADIUS_MM}. The cursor trails the pen by at most the outer radius, and\n\
+         # pen moves within the inner radius don't move it.\n\
+         radial_outer_radius_mm = {}\n\
+         radial_inner_radius_mm = {}\n\
+         # From {MIN_SMOOTHING} to 1. Higher is smoother, but slower to settle on the pen.\n\
+         radial_smoothing = {}\n\
+         # From 0 to {MAX_SOFT_KNEE}. Higher eases the change at the outer radius.\n\
+         radial_soft_knee = {}\n\
+         # From 0 to 1. Lets some smoothing carry on past the outer radius.\n\
+         radial_leak = {}\n\
+         # Time smoothing averages the position over time. Higher is smoother but adds delay.\n\
+         time_smoothing = {}\n\
+         # From {MIN_TIME_MS} to {MAX_TIME_MS}. The cursor catches up about two-thirds of a move in this time.\n\
+         time_smoothing_ms = {}\n\
+         \n\
          # Pen areas in millimetres, as you see the tablet. Offsets move an area from the\n\
          # centre of the tablet, and rotation turns it clockwise.\n",
         s.output.name(),
@@ -365,6 +387,14 @@ pub fn to_text(s: &Settings) -> String {
         s.close_to_tray,
         s.start_minimized,
         s.usb_path.name(),
+        s.filters.radial.on,
+        s.filters.radial.outer_radius_mm,
+        s.filters.radial.inner_radius_mm,
+        s.filters.radial.smoothing,
+        s.filters.radial.soft_knee,
+        s.filters.radial.leak,
+        s.filters.time.on,
+        s.filters.time.ms,
     );
     for preset in &s.presets {
         let a = &preset.area;
@@ -488,6 +518,14 @@ fn top_level_field(s: &mut Settings, active: &mut Option<String>, legacy: &mut L
         "open_tablet_app" => s.open_tablet_app = boolean(value)?,
         "screen_pinning" => s.screen_pinning = boolean(value)?,
         "usb_path" => s.usb_path = UsbPath::parse(value).ok_or(format!("unknown path {value}"))?,
+        "radial_follow" => s.filters.radial.on = boolean(value)?,
+        "radial_outer_radius_mm" => s.filters.radial.outer_radius_mm = in_range(value, &filters::RADIUS_MM)?,
+        "radial_inner_radius_mm" => s.filters.radial.inner_radius_mm = in_range(value, &filters::RADIUS_MM)?,
+        "radial_smoothing" => s.filters.radial.smoothing = in_range(value, &filters::SMOOTHING)?,
+        "radial_soft_knee" => s.filters.radial.soft_knee = in_range(value, &filters::SOFT_KNEE)?,
+        "radial_leak" => s.filters.radial.leak = in_range(value, &filters::LEAK)?,
+        "time_smoothing" => s.filters.time.on = boolean(value)?,
+        "time_smoothing_ms" => s.filters.time.ms = in_range(value, &filters::TIME_MS)?,
         "area_width_mm" => (legacy.area.width, legacy.found) = (number(value)?, true),
         "area_height_mm" => (legacy.area.height, legacy.found) = (number(value)?, true),
         "area_offset_x_mm" => (legacy.area.offset_x, legacy.found) = (number(value)?, true),
@@ -804,6 +842,10 @@ mod tests {
                 open_tablet_app: false,
                 screen_pinning: true,
                 usb_path: UsbPath::Direct,
+                filters: FilterSettings {
+                    radial: filters::RadialFollow { on: true, outer_radius_mm: 2.5, inner_radius_mm: 0.35, smoothing: 0.875, soft_knee: 12.0, leak: 0.25 },
+                    time: filters::TimeSmoothing { on: true, ms: 7.5 },
+                },
             };
             let parsed = parse(&to_text(&s));
             assert_eq!(parsed.problems, Vec::<String>::new());
@@ -945,6 +987,15 @@ mod tests {
             "hold_to_edit_seconds = 0",
             "edit_timeout_seconds = 9999",
             "usb_path = wifi",
+            "radial_follow = yes",
+            "radial_outer_radius_mm = -1",
+            "radial_inner_radius_mm = 21",
+            "radial_smoothing = 0",
+            "radial_soft_knee = 101",
+            "radial_leak = 2",
+            "time_smoothing = maybe",
+            "time_smoothing_ms = 0",
+            "time_smoothing_ms = inf",
         ] {
             let parsed = parse(bad);
             assert!(!parsed.problems.is_empty(), "{bad}");
@@ -953,6 +1004,19 @@ mod tests {
             let again = parse(&to_text(&parsed.settings));
             assert_eq!(again.problems, Vec::<String>::new(), "{bad} saved something unreadable");
         }
+    }
+
+    #[test]
+    fn filters_start_off_and_one_bad_filter_value_only_costs_that_value() {
+        assert!(!Settings::default().filters.any_on());
+        let parsed = parse("radial_follow = true\nradial_outer_radius_mm = 3\nradial_smoothing = 5\ntime_smoothing = true\ntime_smoothing_ms = 9\n");
+        assert_eq!(parsed.problems.len(), 1);
+        assert!(parsed.problems[0].starts_with("line 3: radial_smoothing"), "{}", parsed.problems[0]);
+        let f = parsed.settings.filters;
+        assert!(f.radial.on && f.time.on);
+        assert_eq!(f.radial.outer_radius_mm, 3.0);
+        assert_eq!(f.radial.smoothing, filters::RadialFollow::default().smoothing);
+        assert_eq!(f.time.ms, 9.0);
     }
 
     #[test]

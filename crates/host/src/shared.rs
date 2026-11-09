@@ -6,6 +6,7 @@ use std::sync::Mutex;
 use std::time::Instant;
 
 use crate::adb::DeviceState;
+use crate::filters::FilterSettings;
 use crate::mapping::{ActiveArea, Rect, Rotation};
 use crate::otd::Relay;
 use crate::settings::{self, Output, Settings};
@@ -22,6 +23,8 @@ pub struct LiveConfig {
     pub area: ActiveArea,
     pub tip_click: bool,
     pub button_keys: Option<crate::keys::Combo>,
+    /// Smoothing for direct output.
+    pub filters: FilterSettings,
 }
 
 /// Command-line choices that win over saved settings for this run.
@@ -91,6 +94,7 @@ fn build_live(settings: &Settings, overrides: &Overrides, screen_rotation: Rotat
         area: settings.area().resolve(rotation),
         tip_click: overrides.tip_click.unwrap_or(settings.tip_click),
         button_keys: overrides.button_keys.or_else(|| crate::keys::combo_for_name(&settings.button_key)),
+        filters: settings.filters,
     }
 }
 
@@ -255,6 +259,15 @@ mod tests {
         s.update_settings(|st| st.area_mut().width = 100.0);
         assert_ne!(s.live_generation(), before);
         assert_eq!(s.live_config().area.width_mm, 100.0);
+    }
+
+    #[test]
+    fn filter_changes_reach_the_input_thread_with_a_new_generation() {
+        let s = shared(Settings::default(), Overrides::default());
+        let before = s.live_generation();
+        s.update_settings(|st| st.filters.time.ms = 12.0);
+        assert_ne!(s.live_generation(), before);
+        assert_eq!(s.live_config().filters.time.ms, 12.0);
     }
 
     #[test]

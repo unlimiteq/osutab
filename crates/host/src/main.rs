@@ -11,6 +11,7 @@ mod elevation;
 mod assets;
 mod control;
 mod engine;
+mod filters;
 mod gui;
 mod icon;
 mod inject;

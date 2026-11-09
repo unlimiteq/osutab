@@ -8,6 +8,7 @@ Every version of osu!tab, newest first. Version numbers follow [Semantic Version
 
 - osu!tab is now under the MIT License.
 - **The side button can press up to three keys together**, such as Shift + 2 for `!`, or Shift + Alt + 2 for a hotkey. Hold the keys down, then let go. Ctrl, Shift, Alt and Win go first, and the keys are let go in reverse. `--button-key` takes the same, such as `"left shift + 2"`.
+- **Filters without OpenTabletDriver.** Direct output has two smoothing filters on the Pen area tab, both off by default: radial follow, with the same settings as OpenTabletDriver's Radial Follow Smoothing, and time smoothing, an average over a set number of milliseconds that's timed by the tablet's own report times. Both start over when the pen leaves range, and changes apply straight away.
 
 ### Changed
 
