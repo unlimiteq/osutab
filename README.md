@@ -93,7 +93,7 @@ The pen is read on the tablet before Android touches it, sent over the cable, an
 
 ## Download
 
-Get **`osu-tab-1.0.0-beta.1-windows-x64.zip`** from the [Releases](https://github.com/unlimiteq/osutab/releases) page, unzip it anywhere and run **`osu!tab.exe`**. There's no installer.
+Get **`osu-tab-1.0.0-beta.1-windows-x64.zip`** from the [Releases](https://github.com/unlimiteq/osu-tab/releases) page, unzip it anywhere and run **`osu!tab.exe`**. There's no installer.
 
 | In the zip | What it's for |
 |---|---|
@@ -174,10 +174,10 @@ Added latency runs from the tablet registering a pen event to the PC finishing t
 So far osu!tab has run on one setup. If you have another Samsung tablet with an S Pen, or you play osu!stable, a report helps a lot, whether it works or not.
 
 1. Follow the [Quick start](#quick-start) and play for a bit.
-2. Open a **[compatibility report](https://github.com/unlimiteq/osutab/issues/new?template=compatibility-report.yml)**. It asks for your tablet's model number, its Android and One UI versions, your Windows version, which osu! you play, and what worked.
+2. Open a **[compatibility report](https://github.com/unlimiteq/osu-tab/issues/new?template=compatibility-report.yml)**. It asks for your tablet's model number, its Android and One UI versions, your Windows version, which osu! you play, and what worked.
 3. If you can, attach the latency log from that run. The Latency tab's **Open the logs folder** button finds it.
 
-Found a bug instead? Open a **[bug report](https://github.com/unlimiteq/osutab/issues/new?template=bug-report.yml)**.
+Found a bug instead? Open a **[bug report](https://github.com/unlimiteq/osu-tab/issues/new?template=bug-report.yml)**.
 
 > [!NOTE]
 > osu!tab assumes the S8 Ultra's screen size, 313.8 × 195.9 mm. On another tablet the sizes it shows in mm will be off, and other things may need changes too.

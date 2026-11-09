@@ -76,7 +76,7 @@ The first complete version, then called osutab, built from 2026-10-30.
 
 The program reported 0.1.0 until 1.0.0-beta.1. The 0.2.0 and 0.3.0 tags were added afterwards, to mark those milestones in the history.
 
-[1.0.0-beta.1]: https://github.com/unlimiteq/osutab/compare/v0.3.0...v1.0.0-beta.1
-[0.3.0]: https://github.com/unlimiteq/osutab/compare/v0.2.0...v0.3.0
-[0.2.0]: https://github.com/unlimiteq/osutab/compare/v0.1.0...v0.2.0
-[0.1.0]: https://github.com/unlimiteq/osutab/releases/tag/v0.1.0
+[1.0.0-beta.1]: https://github.com/unlimiteq/osu-tab/compare/v0.3.0...v1.0.0-beta.1
+[0.3.0]: https://github.com/unlimiteq/osu-tab/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/unlimiteq/osu-tab/compare/v0.1.0...v0.2.0
+[0.1.0]: https://github.com/unlimiteq/osu-tab/releases/tag/v0.1.0
