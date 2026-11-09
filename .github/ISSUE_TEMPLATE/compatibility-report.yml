@@ -1,0 +1,85 @@
+name: Compatibility report
+description: Tell us how osu!tab went on your tablet, game or PC, whether it worked or not.
+title: "Compatibility: <tablet model> + <game>"
+labels: [compatibility]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for trying osu!tab. So far it has only been tested on a Galaxy Tab S8 Ultra with osu!lazer on Windows 11, so every report helps, including ones where nothing worked.
+  - type: input
+    id: tablet
+    attributes:
+      label: Tablet model
+      description: Settings > About tablet. Both the name and the model number, such as "Galaxy Tab S9 FE (SM-X510)".
+    validations:
+      required: true
+  - type: input
+    id: android
+    attributes:
+      label: Android and One UI versions
+      description: Settings > About tablet > Software information.
+      placeholder: Android 16, One UI 8.0
+    validations:
+      required: true
+  - type: input
+    id: pen
+    attributes:
+      label: Pen
+      description: The S Pen that came with the tablet, or another one?
+    validations:
+      required: true
+  - type: dropdown
+    id: game
+    attributes:
+      label: Game
+      options:
+        - osu!lazer
+        - osu!stable
+        - Something else (say below)
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Windows version
+      placeholder: Windows 11 24H2
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: osu!tab version
+      description: On the Settings tab, at the bottom.
+      placeholder: 1.0.0-beta.1
+    validations:
+      required: true
+  - type: checkboxes
+    id: worked
+    attributes:
+      label: What worked
+      options:
+        - label: osu!tab found the tablet
+        - label: The tablet app opened full screen and showed the pen area
+        - label: The cursor followed the pen
+        - label: The cursor landed under the pen everywhere on the area
+        - label: Tip clicks and the side button worked
+        - label: OpenTabletDriver mode worked (only if you tried it)
+  - type: dropdown
+    id: output
+    attributes:
+      label: Output mode
+      options:
+        - Direct
+        - OpenTabletDriver
+        - Both
+  - type: textarea
+    id: details
+    attributes:
+      label: How it went
+      description: Anything that didn't work or felt off, and any messages on the Play tab. The latency numbers from the Latency tab help too.
+  - type: textarea
+    id: log
+    attributes:
+      label: Latency log
+      description: Optional. Drag in the latency-*.csv file from that run. The Latency tab's "Open the logs folder" button finds it.

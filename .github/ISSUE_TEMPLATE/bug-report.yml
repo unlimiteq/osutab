@@ -1,0 +1,48 @@
+name: Bug report
+description: Something in osu!tab doesn't work as it should.
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: What you did, what you expected, and what happened instead.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: How to make it happen again
+      placeholder: |
+        1. Start osu!tab
+        2. ...
+  - type: input
+    id: version
+    attributes:
+      label: osu!tab version
+      description: On the Settings tab, at the bottom.
+      placeholder: 1.0.0-beta.1
+    validations:
+      required: true
+  - type: input
+    id: setup
+    attributes:
+      label: Tablet, Windows version and game
+      placeholder: Galaxy Tab S8 Ultra, Windows 11 24H2, osu!lazer
+    validations:
+      required: true
+  - type: dropdown
+    id: path
+    attributes:
+      label: USB path and output
+      options:
+        - Direct USB, Direct output
+        - Direct USB, OpenTabletDriver output
+        - adb.exe, Direct output
+        - adb.exe, OpenTabletDriver output
+        - Not sure
+  - type: textarea
+    id: log
+    attributes:
+      label: Latency log or screenshots
+      description: Optional. The latency-*.csv file from that run says why each connection ended. The Latency tab's "Open the logs folder" button finds it. Screenshots of the Play tab help too.

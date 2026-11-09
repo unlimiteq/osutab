@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Guide
+    url: https://github.com/unlimiteq/osutab/blob/main/docs/GUIDE.md
+    about: Every setting, troubleshooting and the full latency numbers.
