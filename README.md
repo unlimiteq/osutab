@@ -219,6 +219,7 @@ More, including osu!stable and Windows, is in the [guide](docs/GUIDE.md#osu-sett
 | Jumps don't land under the pen | Turn off High precision mouse in lazer. |
 | Occasional stutters | Close background apps. The Play tab says which program was in front. |
 | OpenTabletDriver mode doesn't start | Install the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). |
+| The cursor jumps back and forth in OpenTabletDriver mode | An older osu!tab added a second S Pen tablet. This version removes it and restarts OpenTabletDriver when you pick its mode. Don't run an older copy, which adds it back. |
 
 The [guide](docs/GUIDE.md#troubleshooting) has more.
 

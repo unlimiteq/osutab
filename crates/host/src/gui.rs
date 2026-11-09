@@ -783,11 +783,23 @@ impl App {
     /// Starts OpenTabletDriver when its mode is chosen, or at startup if it was left on.
     fn ensure_otd_running(&mut self) {
         let Some(dir) = otd::program_dir(&self.exe_dir) else { return };
-        if let Err(e) = otd::install(&otd::data_dir()) {
+        let data = otd::data_dir();
+        let mut daemon = self.shared.otd_daemon.lock().unwrap();
+        // A running daemon keeps what it loaded as it started, such as an old osu!tab's plugin, or
+        // the second S Pen tablet an old osu!tab made, so it has to start again.
+        if otd::setup_needs_restart(&data) && otd::daemon_running() {
+            if let Some(mut ours) = daemon.take() {
+                ours.kill();
+            }
+            if !otd::stop_daemons() {
+                self.message = "OpenTabletDriver has to restart to take osu!tab's changes, and it's running as administrator. Quit it from its tray icon, then pick OpenTabletDriver again.".to_string();
+                return;
+            }
+        }
+        if let Err(e) = otd::install(&data) {
             self.message = format!("Could not set up OpenTabletDriver: {e}");
             return;
         }
-        let mut daemon = self.shared.otd_daemon.lock().unwrap();
         if daemon.is_none() {
             match otd::start_daemon(&dir) {
                 Ok(child) => *daemon = Some(child),

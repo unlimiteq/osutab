@@ -21,7 +21,12 @@ const TOOL_PATH: &str = "OsutabBridge.OsutabBridgeTool";
 /// The tablet's name in OpenTabletDriver, and the name it had before the program was osu!tab.
 pub const TABLET_NAME: &str = "osu!tab S Pen";
 const OLD_TABLET_NAME: &str = "osutab S Pen";
+// The IDs the bridge plugin gives the S Pen, which its tablet configuration names.
+const BRIDGE_VENDOR: u64 = 0x1209;
+const BRIDGE_PRODUCT: u64 = 0x0001;
+const DAEMON: &str = "OpenTabletDriver.Daemon.exe";
 const FLUSH_INTERVAL: Duration = Duration::from_millis(2);
+const DAEMON_STOP_WAIT_MS: u32 = 3000;
 // How often to look at OpenTabletDriver's settings for a changed area.
 const AREA_CHECK_EVERY: Duration = Duration::from_millis(500);
 // The tablet configuration in otd-plugin: landscape, at 0.01 mm per unit.
@@ -121,25 +126,42 @@ impl Relay {
         }
     }
 
-    /// Accepts the bridge plugin for the whole run. A new connection replaces the old one.
+    /// Accepts the bridge plugin for the whole run.
     pub fn serve(&self) {
-        let listener = match TcpListener::bind((Ipv4Addr::LOCALHOST, RELAY_PORT)) {
-            Ok(l) => l,
-            Err(e) => {
-                eprintln!("OpenTabletDriver link unavailable: {e}");
-                return;
-            }
-        };
+        match TcpListener::bind((Ipv4Addr::LOCALHOST, RELAY_PORT)) {
+            Ok(listener) => self.serve_on(listener),
+            Err(e) => eprintln!("OpenTabletDriver link unavailable: {e}"),
+        }
+    }
+
+    /// A new connection takes over only once the one before has closed. OpenTabletDriver makes a
+    /// tablet from each configuration that names the S Pen, and each one connects. If each could
+    /// take over, two would swap every time the other reconnected, and the cursor would jump
+    /// between their two areas.
+    fn serve_on(&self, listener: TcpListener) {
         std::thread::scope(|scope| {
             scope.spawn(|| self.flush_loop());
             for stream in listener.incoming().flatten() {
+                let mut client = self.client.lock().unwrap();
+                if client.as_ref().is_some_and(|c| still_open(&c.stream)) {
+                    continue;
+                }
                 if stream.set_nodelay(true).is_ok() && stream.set_nonblocking(true).is_ok() {
-                    *self.client.lock().unwrap() = Some(Client { stream, backlog: Backlog::default() });
+                    *client = Some(Client { stream, backlog: Backlog::default() });
                     self.backed_up.store(false, Ordering::SeqCst);
                     self.connected.store(true, Ordering::SeqCst);
                 }
             }
         });
+    }
+}
+
+/// The plugin never sends anything, so a socket with nothing to read is still open.
+fn still_open(stream: &TcpStream) -> bool {
+    match stream.peek(&mut [0u8; 1]) {
+        Ok(0) => false,
+        Ok(_) => true,
+        Err(e) => e.kind() == ErrorKind::WouldBlock,
     }
 }
 
@@ -263,6 +285,76 @@ impl AreaWatch {
     }
 }
 
+fn plugin_path(data: &Path) -> PathBuf {
+    data.join("Plugins").join("OsutabBridge").join("OsutabBridge.dll")
+}
+
+fn config_path(data: &Path) -> PathBuf {
+    data.join("Configurations").join(format!("{TABLET_NAME}.json"))
+}
+
+/// True if a tablet configuration names the S Pen's IDs.
+fn names_the_s_pen(text: &str) -> bool {
+    let Ok(config) = serde_json::from_str::<Value>(text.trim_start_matches('\u{feff}')) else { return false };
+    let ids = config.get("DigitizerIdentifiers").and_then(Value::as_array);
+    ids.is_some_and(|ids| {
+        ids.iter().any(|id| {
+            id.get("VendorID").and_then(Value::as_u64) == Some(BRIDGE_VENDOR) && id.get("ProductID").and_then(Value::as_u64) == Some(BRIDGE_PRODUCT)
+        })
+    })
+}
+
+/// Tablet configurations besides ours that name the S Pen, such as the one an older osu!tab left
+/// under its old name. OpenTabletDriver makes a second tablet from each, with its own area.
+pub fn duplicate_configurations(data: &Path) -> Vec<PathBuf> {
+    let ours = format!("{TABLET_NAME}.json");
+    let Ok(entries) = fs::read_dir(data.join("Configurations")) else { return Vec::new() };
+    entries
+        .flatten()
+        .map(|entry| entry.path())
+        .filter(|path| path.extension().is_some_and(|x| x.eq_ignore_ascii_case("json")))
+        .filter(|path| path.file_name().is_some_and(|name| name != ours.as_str()))
+        .filter(|path| fs::read_to_string(path).is_ok_and(|text| names_the_s_pen(&text)))
+        .collect()
+}
+
+/// True if setting up would change what a running daemon has loaded: the plugin, the S Pen's
+/// configuration, or a second configuration for it. A daemon only reads those as it starts, and
+/// it holds the plugin's file open.
+pub fn setup_needs_restart(data: &Path) -> bool {
+    let differs = |path: PathBuf, bytes: &[u8]| fs::read(path).map_or(true, |existing| existing != bytes);
+    let plugin = assets::bridge_plugin().is_some_and(|plugin| differs(plugin_path(data), plugin));
+    plugin || differs(config_path(data), assets::bridge_config()) || !duplicate_configurations(data).is_empty()
+}
+
+pub fn daemon_running() -> bool {
+    !crate::tuning::process_ids(DAEMON).is_empty()
+}
+
+/// Stops every OpenTabletDriver daemon, and waits for each to go. False if one couldn't be
+/// stopped, which happens when it has administrator rights and this program doesn't.
+pub fn stop_daemons() -> bool {
+    use windows_sys::Win32::Foundation::CloseHandle;
+    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
+    let mut all = true;
+    for id in crate::tuning::process_ids(DAEMON) {
+        unsafe {
+            let process = OpenProcess(PROCESS_TERMINATE | PROCESS_SYNCHRONIZE, 0, id);
+            if process.is_null() {
+                all = false;
+                continue;
+            }
+            // Stopping one that's already on its way out fails, so what counts is that it's gone.
+            TerminateProcess(process, 1);
+            if WaitForSingleObject(process, DAEMON_STOP_WAIT_MS) != 0 {
+                all = false;
+            }
+            CloseHandle(process);
+        }
+    }
+    all
+}
+
 /// Puts the bridge plugin, tablet configuration and setting where OpenTabletDriver looks for them.
 pub fn install(data: &Path) -> Result<(), String> {
     let plugin = assets::bridge_plugin().ok_or("this build doesn't include the bridge plugin")?;
@@ -276,10 +368,9 @@ pub fn install(data: &Path) -> Result<(), String> {
         }
         fs::write(path, bytes)
     };
-    write(data.join("Plugins").join("OsutabBridge").join("OsutabBridge.dll"), plugin).map_err(|e| e.to_string())?;
-    write(data.join("Configurations").join(format!("{TABLET_NAME}.json")), config).map_err(|e| e.to_string())?;
-    // Two configurations for the same device would leave OpenTabletDriver to pick one.
-    let _ = fs::remove_file(data.join("Configurations").join(format!("{OLD_TABLET_NAME}.json")));
+    write(plugin_path(data), plugin).map_err(|e| e.to_string())?;
+    write(config_path(data), config).map_err(|e| e.to_string())?;
+    remove_duplicate_configurations(data)?;
 
     let settings_path = data.join("settings.json");
     let existing = fs::read_to_string(&settings_path).ok();
@@ -288,6 +379,14 @@ pub fn install(data: &Path) -> Result<(), String> {
             let _ = fs::copy(&settings_path, data.join("settings.before-osu!tab.json"));
         }
         fs::write(&settings_path, updated).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+/// Two tablets on the one pen would take turns with it.
+fn remove_duplicate_configurations(data: &Path) -> Result<(), String> {
+    for duplicate in duplicate_configurations(data) {
+        fs::remove_file(&duplicate).map_err(|e| format!("can't remove {}: {e}", duplicate.display()))?;
     }
     Ok(())
 }
@@ -518,5 +617,96 @@ mod tests {
         fs::write(dir.join("settings.json"), other).unwrap();
         assert!(!uses_windows_ink(&dir));
         let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_second_configuration_for_the_s_pen_is_found_and_removed() {
+        let dir = std::env::temp_dir().join(format!("osutab-test-otd-dupes-{}", std::process::id()));
+        let configs = dir.join("Configurations");
+        fs::create_dir_all(&configs).unwrap();
+        let ours = std::str::from_utf8(assets::bridge_config()).unwrap();
+        assert!(names_the_s_pen(ours), "our own configuration should name the S Pen");
+        fs::write(config_path(&dir), ours).unwrap();
+        // What the old build installed: the same IDs under the old name.
+        fs::write(configs.join("osutab S Pen.json"), ours.replace(TABLET_NAME, OLD_TABLET_NAME)).unwrap();
+        fs::write(configs.join("copy.JSON"), format!("\u{feff}{ours}")).unwrap();
+        let wacom = r#"{"Name":"Wacom CTL-472","DigitizerIdentifiers":[{"VendorID":1386,"ProductID":890}]}"#;
+        fs::write(configs.join("Wacom CTL-472.json"), wacom).unwrap();
+        fs::write(configs.join("broken.json"), "{").unwrap();
+
+        let mut found: Vec<String> = duplicate_configurations(&dir).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        found.sort();
+        assert_eq!(found, ["copy.JSON", "osutab S Pen.json"]);
+        remove_duplicate_configurations(&dir).unwrap();
+        assert!(duplicate_configurations(&dir).is_empty());
+        assert!(config_path(&dir).exists() && configs.join("Wacom CTL-472.json").exists() && configs.join("broken.json").exists());
+        assert!(!configs.join("osutab S Pen.json").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_missing_configuration_or_a_duplicate_needs_a_restart() {
+        let dir = std::env::temp_dir().join(format!("osutab-test-otd-restart-{}", std::process::id()));
+        let configs = dir.join("Configurations");
+        fs::create_dir_all(&configs).unwrap();
+        assert!(setup_needs_restart(&dir), "a daemon without our configuration doesn't know the S Pen");
+        fs::write(config_path(&dir), assets::bridge_config()).unwrap();
+        if let Some(plugin) = assets::bridge_plugin() {
+            fs::create_dir_all(plugin_path(&dir).parent().unwrap()).unwrap();
+            fs::write(plugin_path(&dir), plugin).unwrap();
+        }
+        assert!(!setup_needs_restart(&dir));
+        fs::write(configs.join("osutab S Pen.json"), assets::bridge_config()).unwrap();
+        assert!(setup_needs_restart(&dir));
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+        let start = Instant::now();
+        while !done() {
+            assert!(start.elapsed() < Duration::from_secs(5), "timed out waiting for {what}");
+            std::thread::sleep(Duration::from_millis(10));
+        }
+    }
+
+    #[test]
+    fn a_second_tablet_cannot_take_the_pen_from_one_that_is_still_connected() {
+        use std::io::Read;
+        let relay: &'static Relay = Box::leak(Box::default());
+        let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        std::thread::spawn(move || relay.serve_on(listener));
+        let read_frame = |mut stream: &TcpStream| -> io::Result<[u8; DOWN_FRAME_LEN]> {
+            stream.set_read_timeout(Some(Duration::from_secs(2)))?;
+            let mut frame = [0u8; DOWN_FRAME_LEN];
+            stream.read_exact(&mut frame).map(|_| frame)
+        };
+
+        let first = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        wait_for("the first connection", || relay.connected.load(Ordering::SeqCst));
+        let mut second = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+        second.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+        match second.read(&mut [0u8; 1]) {
+            Ok(0) => {}
+            Err(e) if !matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut) => {}
+            other => panic!("the second connection should have been closed, got {other:?}"),
+        }
+        relay.send(&[7; DOWN_FRAME_LEN]);
+        assert_eq!(read_frame(&first).unwrap()[0], 7, "the first should still get the pen");
+
+        // Once the first has gone, the next one gets the pen.
+        drop(first);
+        let mut taken = None;
+        for _ in 0..50 {
+            std::thread::sleep(Duration::from_millis(20));
+            let third = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+            std::thread::sleep(Duration::from_millis(20));
+            relay.send(&[9; DOWN_FRAME_LEN]);
+            if read_frame(&third).is_ok_and(|frame| frame[0] == 9) {
+                taken = Some(third);
+                break;
+            }
+        }
+        assert!(taken.is_some(), "a new connection should take over once the old one closed");
     }
 }

@@ -11,6 +11,11 @@ Every version of osu!tab, newest first. Version numbers follow [Semantic Version
 ### Changed
 
 - The side button picker chooses when you let go of a key, not when you press it, so Shift can start a combination or be the key on its own. It shows the keys held so far.
+- Choosing OpenTabletDriver mode restarts its daemon when osu!tab's plugin or tablet configuration changed, because a running daemon keeps the ones it started with.
+
+### Fixed
+
+- **In OpenTabletDriver mode the cursor jumped back and forth.** An older osu!tab's "osutab S Pen" configuration made OpenTabletDriver see the S Pen as two tablets, each with its own area, which took turns with the pen. osu!tab now removes any second configuration for the S Pen, and a second tablet can't take the pen while the first is connected.
 
 ## [1.0.0-beta.1] - 2026-11-08
 

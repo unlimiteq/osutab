@@ -146,6 +146,8 @@ Set the pen area in OpenTabletDriver, in Absolute Mode. osu!tab draws that area 
 
 OpenTabletDriver doesn't work properly as administrator, so osu!tab starts its daemon and settings window without administrator rights, even when osu!tab itself has them. If one is already running as administrator, the Play tab says so: quit it from its tray icon and osu!tab starts it again.
 
+OpenTabletDriver's daemon only loads plugins and tablet configurations as it starts. So when you pick OpenTabletDriver mode and osu!tab has to update its plugin or configuration, or remove a second configuration for the S Pen that an older osu!tab left, it restarts a daemon that's already running. Two configurations for the one pen would make two tablets, each with its own area, and the cursor would jump between them.
+
 What has been tested:
 
 - osu!tab starts the daemon in about 0.4 s, the bridge plugin connects about 1.5 s later, and the tablet draws OpenTabletDriver's area where it maps the pen.
@@ -168,6 +170,7 @@ What hasn't been tested: the S Pen itself in this mode, and any community plugin
 | The pen doesn't work on the tablet itself | osu!tab holds the pen while it runs. Quit osu!tab to give it back. |
 | OpenTabletDriver mode doesn't start | Install the [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/download/dotnet/10.0). |
 | "OpenTabletDriver has no pen area for the S Pen yet" | Open OpenTabletDriver, pick osu!tab S Pen, and set an area in Absolute Mode. |
+| In OpenTabletDriver mode the cursor jumps back and forth | OpenTabletDriver has the S Pen twice, usually because an older osu!tab added a second "osutab S Pen". This version removes it and restarts OpenTabletDriver when you pick its mode. Don't run an older copy of osu!tab, which adds it back. |
 
 ## How it works
 
