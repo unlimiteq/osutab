@@ -1779,7 +1779,7 @@ impl App {
         });
         self.card(ui, |_, ui| {
             section_title(ui, concat!("osu!tab ", env!("CARGO_PKG_VERSION")));
-            hint(ui, "A beta. Tested with a Samsung Galaxy Tab S8 Ultra, the S Pen that comes with it, and osu!lazer on Windows 11. Other tablets and osu!stable haven't been tested yet.", &palette);
+            hint(ui, "Tested with a Samsung Galaxy Tab S8 Ultra, the S Pen that comes with it, and osu!lazer on Windows 11. Other tablets and osu!stable haven't been tested yet.", &palette);
             hint(ui, "Settings and logs are in %APPDATA%\\osu!tab.", &palette);
         });
     }

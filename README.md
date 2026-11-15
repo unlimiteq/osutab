@@ -10,8 +10,8 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/version-1.0.0--beta.1-ff5fa2" alt="Version 1.0.0-beta.1">
-  <img src="https://img.shields.io/badge/status-beta-f59e0b" alt="Status: beta">
+  <img src="https://img.shields.io/badge/version-1.0.0-ff5fa2" alt="Version 1.0.0">
+  <img src="https://img.shields.io/badge/status-stable-22c55e" alt="Status: stable">
   <img src="https://img.shields.io/badge/PC-Windows%2011-3b82f6" alt="PC: Windows 11">
   <img src="https://img.shields.io/badge/tested%20on-Galaxy%20Tab%20S8%20Ultra-22c55e" alt="Tested on a Galaxy Tab S8 Ultra">
   <img src="https://img.shields.io/badge/game-osu!lazer-ff66aa" alt="Game: osu!lazer">
@@ -31,7 +31,7 @@
 </p>
 
 > [!IMPORTANT]
-> **osu!tab is in beta.** It has only been tested on a **Samsung Galaxy Tab S8 Ultra** with the **S Pen that comes in the box**, playing **osu!lazer** on Windows 11. If you have a different Samsung tablet, or play osu!stable, please try it and tell us how it went. See [Help test osu!tab](#help-test-osutab).
+> osu!tab has only been tested on a **Samsung Galaxy Tab S8 Ultra** with the **S Pen that comes in the box**, playing **osu!lazer** on Windows 11. If you have a different Samsung tablet, or play osu!stable, please try it and tell us how it went. See [Help test osu!tab](#help-test-osutab).
 
 ## What it does
 
@@ -94,7 +94,7 @@ The pen is read on the tablet before Android touches it, sent over the cable, an
 
 ## Download
 
-Get **`osu-tab-1.0.0-beta.1-windows-x64.zip`** from the [Releases](https://github.com/unlimiteq/osutab/releases) page, unzip it anywhere and run **`osu!tab.exe`**. There's no installer.
+Get **`osu-tab-1.0.0-windows-x64.zip`** from the [Releases](https://github.com/unlimiteq/osutab/releases) page, unzip it anywhere and run **`osu!tab.exe`**. There's no installer.
 
 | In the zip | What it's for |
 |---|---|

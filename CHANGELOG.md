@@ -4,6 +4,10 @@ Every version of osu!tab, newest first. Version numbers follow [Semantic Version
 
 ## [Unreleased]
 
+## [1.0.0] - 2026-11-15
+
+The first full release. osu!tab is no longer called a beta, though it has still only been tested on a Galaxy Tab S8 Ultra with osu!lazer.
+
 ### Added
 
 - osu!tab is now under the MIT License.
@@ -96,7 +100,8 @@ The first complete version, then called osutab, built from 2026-10-30.
 
 The program reported 0.1.0 until 1.0.0-beta.1. The 0.2.0 and 0.3.0 tags were added afterwards, to mark those milestones in the history.
 
-[Unreleased]: https://github.com/unlimiteq/osutab/compare/v1.0.0-beta.1...HEAD
+[Unreleased]: https://github.com/unlimiteq/osutab/compare/v1.0.0...HEAD
+[1.0.0]: https://github.com/unlimiteq/osutab/compare/v1.0.0-beta.1...v1.0.0
 [1.0.0-beta.1]: https://github.com/unlimiteq/osutab/compare/v0.3.0...v1.0.0-beta.1
 [0.3.0]: https://github.com/unlimiteq/osutab/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/unlimiteq/osutab/compare/v0.1.0...v0.2.0

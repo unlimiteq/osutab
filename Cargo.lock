@@ -2020,18 +2020,18 @@ dependencies = [
 
 [[package]]
 name = "osutab-core"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 
 [[package]]
 name = "osutab-helper"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 dependencies = [
  "osutab-core",
 ]
 
 [[package]]
 name = "osutab-host"
-version = "1.0.0-beta.1"
+version = "1.0.0"
 dependencies = [
  "eframe",
  "osutab-core",
