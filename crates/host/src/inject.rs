@@ -46,7 +46,9 @@ pub fn cursor_position() -> (i32, i32) {
 /// The file name of the program in front, for the log.
 pub fn foreground_program() -> String {
     use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, QueryFullProcessImageNameW, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
     unsafe {
         let mut pid = 0u32;
         GetWindowThreadProcessId(GetForegroundWindow(), &mut pid);
@@ -73,9 +75,7 @@ pub fn set_cursor_position(x: i32, y: i32) {
 fn mouse_input(dx: i32, dy: i32, flags: u32) -> INPUT {
     INPUT {
         r#type: INPUT_MOUSE,
-        Anonymous: INPUT_0 {
-            mi: MOUSEINPUT { dx, dy, mouseData: 0, dwFlags: flags, time: 0, dwExtraInfo: 0 },
-        },
+        Anonymous: INPUT_0 { mi: MOUSEINPUT { dx, dy, mouseData: 0, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
     }
 }
 
@@ -83,9 +83,7 @@ fn key_input(code: u16, up: bool) -> INPUT {
     let (vk, scan, flags) = key_fields(code, up);
     INPUT {
         r#type: INPUT_KEYBOARD,
-        Anonymous: INPUT_0 {
-            ki: KEYBDINPUT { wVk: vk, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 },
-        },
+        Anonymous: INPUT_0 { ki: KEYBDINPUT { wVk: vk, wScan: scan, dwFlags: flags, time: 0, dwExtraInfo: 0 } },
     }
 }
 

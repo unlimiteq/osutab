@@ -122,9 +122,8 @@ impl ActiveArea {
     /// The area's corners in mm on the tablet, clockwise from its top-left.
     pub fn corners(&self) -> [(f64, f64); 4] {
         let (hw, hh) = (self.width_mm / 2.0, self.height_mm / 2.0);
-        [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)].map(|(x, y)| {
-            (self.center_x + x * self.cos - y * self.sin, self.center_y + x * self.sin + y * self.cos)
-        })
+        [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)]
+            .map(|(x, y)| (self.center_x + x * self.cos - y * self.sin, self.center_y + x * self.sin + y * self.cos))
     }
 
     /// Screen pixels crossed per mm of pen movement, across and down the area.

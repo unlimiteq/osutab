@@ -108,7 +108,8 @@ fn save(dir: &PathBuf, number: u32, stall: &Entry, reason: &str, window: &[Entry
     let _ = fs::create_dir_all(dir);
     let path = dir.join(format!("stall-{number:03}.csv"));
     let Ok(mut file) = fs::File::create(&path) else { return };
-    let _ = writeln!(file, "at_ms,kind,seq,transport_ms,helper_ms,host_ms,rtt_ms,up_ms,down_ms,tablet_gap_ms,pc_gap_ms");
+    let _ =
+        writeln!(file, "at_ms,kind,seq,transport_ms,helper_ms,host_ms,rtt_ms,up_ms,down_ms,tablet_gap_ms,pc_gap_ms");
     for e in window {
         let _ = writeln!(
             file,

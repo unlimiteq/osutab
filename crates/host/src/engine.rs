@@ -261,7 +261,13 @@ fn session_started(adb: Option<&Adb>, shared: &Arc<Shared>, disconnected_at: &mu
 }
 
 /// In test mode, waits for the cursor to reach the new position and checks where it landed.
-fn measure_cursor(shared: &Shared, target: &crate::mapping::Rect, before: (i32, i32), exact: (f64, f64), previous: &mut Option<(f64, f64)>) -> Option<f32> {
+fn measure_cursor(
+    shared: &Shared,
+    target: &crate::mapping::Rect,
+    before: (i32, i32),
+    exact: (f64, f64),
+    previous: &mut Option<(f64, f64)>,
+) -> Option<f32> {
     let expected = target.pixel_index(exact);
     let t0 = Instant::now();
     let mut cursor = inject::cursor_position();
@@ -280,18 +286,19 @@ fn measure_cursor(shared: &Shared, target: &crate::mapping::Rect, before: (i32, 
     let dy = exact.1 - (cursor.1 as f64 + 0.5);
     let jump = previous.is_some_and(|p| (p.0 - exact.0).hypot(p.1 - exact.1) >= JUMP_PX);
     *previous = Some(exact);
-    shared.stats.record_precision(PrecisionSample {
-        exact,
-        cursor,
-        error_px: dx.hypot(dy) as f32,
-        jump,
-        timed_out,
-    });
+    shared.stats.record_precision(PrecisionSample { exact, cursor, error_px: dx.hypot(dy) as f32, jump, timed_out });
     (should_move && !timed_out).then_some(waited_ms)
 }
 
 /// The hot path: one blocking read, one SendInput, per pen report.
-fn pump<L: PenLink>(link: &mut L, hello: &Hello, injector: &mut Injector, shared: &Shared, options: &EngineOptions, recorder: &mut Option<Recorder>) -> io::Result<()> {
+fn pump<L: PenLink>(
+    link: &mut L,
+    hello: &Hello,
+    injector: &mut Injector,
+    shared: &Shared,
+    options: &EngineOptions,
+    recorder: &mut Option<Recorder>,
+) -> io::Result<()> {
     let ping_bench = options.ping_bench;
     let mut last_sample_at: Option<Duration> = None;
     let clock = shared.clock;
@@ -347,7 +354,9 @@ fn pump<L: PenLink>(link: &mut L, hello: &Hello, injector: &mut Injector, shared
                 let host_ms = (clock.elapsed() - now).as_secs_f32() * 1e3;
                 if host_ms >= SLOW_CURSOR_MS {
                     let program = inject::foreground_program();
-                    stats.event(Event::Note(format!("Windows held up the cursor for {host_ms:.0} ms, with {program} in front")));
+                    stats.event(Event::Note(format!(
+                        "Windows held up the cursor for {host_ms:.0} ms, with {program} in front"
+                    )));
                     *shared.last_freeze.lock().unwrap() = Some((Instant::now(), host_ms, program));
                 }
 
@@ -376,12 +385,8 @@ fn pump<L: PenLink>(link: &mut L, hello: &Hello, injector: &mut Injector, shared
                         ..Entry::default()
                     });
                 }
-                let timing = SampleTiming {
-                    helper_ms,
-                    link_ms: transport_ms.map(|t| t - helper_ms),
-                    host_ms,
-                    cursor_ms,
-                };
+                let timing =
+                    SampleTiming { helper_ms, link_ms: transport_ms.map(|t| t - helper_ms), host_ms, cursor_ms };
                 let gaps = prev_seq.map_or(0, |p| s.seq.wrapping_sub(p).wrapping_sub(1));
                 prev_seq = Some(s.seq);
                 let changed = s.flags ^ prev_flags;
@@ -427,7 +432,15 @@ fn pump<L: PenLink>(link: &mut L, hello: &Hello, injector: &mut Injector, shared
 }
 
 /// The path through adb.exe. `had_hello` says whether the helper ever answered.
-fn run_session(options: &EngineOptions, shared: &Arc<Shared>, injector: &mut Injector, disconnected_at: &mut Option<Instant>, recorder: &mut Option<Recorder>, open_app: bool, had_hello: &mut bool) -> io::Result<()> {
+fn run_session(
+    options: &EngineOptions,
+    shared: &Arc<Shared>,
+    injector: &mut Injector,
+    disconnected_at: &mut Option<Instant>,
+    recorder: &mut Option<Recorder>,
+    open_app: bool,
+    had_hello: &mut bool,
+) -> io::Result<()> {
     let adb = &options.adb;
     adb.forward(FORWARD_PORT, SOCKET_NAME)?;
     let mut child = adb.spawn_helper(&options.helper_args())?;
@@ -444,7 +457,9 @@ fn run_session(options: &EngineOptions, shared: &Arc<Shared>, injector: &mut Inj
         }
         session_started(Some(adb), shared, disconnected_at, &hello);
         let mut pinger = stream.try_clone()?;
-        start_pinger(ping_interval(options), shared.clock, move |host_ns| pinger.write_all(&UpFrame::Ping { host_ns }.encode()));
+        start_pinger(ping_interval(options), shared.clock, move |host_ns| {
+            pinger.write_all(&UpFrame::Ping { host_ns }.encode())
+        });
         if options.busy_poll {
             stream.set_nonblocking(true)?;
         }
@@ -459,7 +474,15 @@ fn run_session(options: &EngineOptions, shared: &Arc<Shared>, injector: &mut Inj
 
 /// The direct path. adb.exe does the setup, since it knows how to install and start things, then
 /// steps aside so this program can open the USB interface itself.
-fn run_direct_session(options: &EngineOptions, shared: &Arc<Shared>, injector: &mut Injector, disconnected_at: &mut Option<Instant>, recorder: &mut Option<Recorder>, open_app: bool, had_hello: &mut bool) -> Result<io::Result<()>, io::Error> {
+fn run_direct_session(
+    options: &EngineOptions,
+    shared: &Arc<Shared>,
+    injector: &mut Injector,
+    disconnected_at: &mut Option<Instant>,
+    recorder: &mut Option<Recorder>,
+    open_app: bool,
+    had_hello: &mut bool,
+) -> Result<io::Result<()>, io::Error> {
     let adb = &options.adb;
     if let Some(apk) = &options.app {
         prepare_tablet_app(adb, apk, shared, false, open_app);
@@ -501,7 +524,12 @@ fn tablet_command(open_app: bool, pin: bool, unpin: bool) -> Option<String> {
 }
 
 /// Starts over USB without adb.exe.
-fn start_quickly(options: &EngineOptions, shared: &Shared, key: &AdbKey, open_app: bool) -> Result<QuickStarted, QuickStartError> {
+fn start_quickly(
+    options: &EngineOptions,
+    shared: &Shared,
+    key: &AdbKey,
+    open_app: bool,
+) -> Result<QuickStarted, QuickStartError> {
     let mut stamps = vec![adb::helper_stamp(&options.helper)?];
     let mut command = None;
     let mut opening = false;
@@ -545,7 +573,15 @@ fn start_quickly(options: &EngineOptions, shared: &Shared, key: &AdbKey, open_ap
     Ok(started)
 }
 
-fn run_direct_link(mut link: DirectLink, hello: &Hello, options: &EngineOptions, shared: &Arc<Shared>, injector: &mut Injector, disconnected_at: &mut Option<Instant>, recorder: &mut Option<Recorder>) -> io::Result<()> {
+fn run_direct_link(
+    mut link: DirectLink,
+    hello: &Hello,
+    options: &EngineOptions,
+    shared: &Arc<Shared>,
+    injector: &mut Injector,
+    disconnected_at: &mut Option<Instant>,
+    recorder: &mut Option<Recorder>,
+) -> io::Result<()> {
     shared.direct_active.store(true, Ordering::SeqCst);
     shared.usb3_link.store(link.is_usb3(), Ordering::SeqCst);
     session_started(None, shared, disconnected_at, hello);
@@ -562,7 +598,8 @@ fn run_direct_link(mut link: DirectLink, hello: &Hello, options: &EngineOptions,
     shared.connected.store(false, Ordering::SeqCst);
     // Quitting while the tablet is still here, so this saves starting adb.exe just to do it.
     if shared.stats.stop.load(Ordering::SeqCst) {
-        let command = adb::closing_command(shared.pinned.load(Ordering::SeqCst), shared.app_opened.load(Ordering::SeqCst));
+        let command =
+            adb::closing_command(shared.pinned.load(Ordering::SeqCst), shared.app_opened.load(Ordering::SeqCst));
         if command.is_some_and(|command| link.run_before_closing(&command).is_ok()) {
             shared.pinned.store(false, Ordering::SeqCst);
             shared.app_opened.store(false, Ordering::SeqCst);
@@ -575,7 +612,12 @@ fn run_direct_link(mut link: DirectLink, hello: &Hello, options: &EngineOptions,
 }
 
 /// Tidies up after a session. Returns true if the program is stopping.
-fn session_ended(shared: &Shared, injector: &mut Injector, disconnected_at: &mut Option<Instant>, outcome: io::Result<()>) -> bool {
+fn session_ended(
+    shared: &Shared,
+    injector: &mut Injector,
+    disconnected_at: &mut Option<Instant>,
+    outcome: io::Result<()>,
+) -> bool {
     injector.reset();
     if shared.stats.stop.load(Ordering::SeqCst) {
         return true;
@@ -641,15 +683,21 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
                     continue;
                 }
                 AdbInterface::Other => {
-                    stats.event(Event::Note("using adb.exe, because the adb device here isn't this tablet".to_string()));
+                    stats
+                        .event(Event::Note("using adb.exe, because the adb device here isn't this tablet".to_string()));
                     needs_adb = true;
                 }
                 AdbInterface::Tablet => {
                     if key.is_none() {
-                        match adbkey::key_dir().ok_or_else(|| io::Error::other("no user profile folder")).and_then(|dir| adbkey::load_or_create(&dir)) {
+                        match adbkey::key_dir()
+                            .ok_or_else(|| io::Error::other("no user profile folder"))
+                            .and_then(|dir| adbkey::load_or_create(&dir))
+                        {
                             Ok(loaded) => key = Some(loaded),
                             Err(e) => {
-                                stats.event(Event::Note(format!("using adb.exe, because this PC's adb key couldn't be read or made: {e}")));
+                                stats.event(Event::Note(format!(
+                                    "using adb.exe, because this PC's adb key couldn't be read or made: {e}"
+                                )));
                                 needs_adb = true;
                             }
                         }
@@ -661,13 +709,23 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
                             opened_app = true;
                             shared.set_device_state(DeviceState::Ready);
                             if started.set_up {
-                                stats.event(Event::Note("put this build's helper and tablet app on the tablet".to_string()));
+                                stats.event(Event::Note(
+                                    "put this build's helper and tablet app on the tablet".to_string(),
+                                ));
                             }
                             if waiting_reported {
                                 stats.event(Event::TabletVisible);
                             }
                             waiting_reported = false;
-                            let outcome = run_direct_link(started.link, &started.hello, &options, &shared, &mut injector, &mut disconnected_at, &mut recorder);
+                            let outcome = run_direct_link(
+                                started.link,
+                                &started.hello,
+                                &options,
+                                &shared,
+                                &mut injector,
+                                &mut disconnected_at,
+                                &mut recorder,
+                            );
                             if session_ended(&shared, &mut injector, &mut disconnected_at, outcome) {
                                 break;
                             }
@@ -682,13 +740,17 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
                             continue;
                         }
                         Err(QuickStartError::SetupFailed(e)) => {
-                            stats.event(Event::Note(format!("using adb.exe, because setting up the tablet over USB failed: {e}")));
+                            stats.event(Event::Note(format!(
+                                "using adb.exe, because setting up the tablet over USB failed: {e}"
+                            )));
                             needs_adb = true;
                         }
                         Err(e) => {
                             let started = *quick_since.get_or_insert_with(Instant::now);
                             let (patience, what) = match &e {
-                                QuickStartError::Busy => (BUSY_PATIENCE, "something else has the USB connection".to_string()),
+                                QuickStartError::Busy => {
+                                    (BUSY_PATIENCE, "something else has the USB connection".to_string())
+                                }
                                 QuickStartError::Failed(e) => (QUICK_START_PATIENCE, e.to_string()),
                                 QuickStartError::Unauthorized | QuickStartError::SetupFailed(_) => unreachable!(),
                             };
@@ -701,10 +763,14 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
                             // Usually an adb server left running, by this program or another. Stopping
                             // it is what the adb.exe route would do anyway, only 5 s slower.
                             if matches!(e, QuickStartError::Busy) && adb::stop_server() {
-                                stats.event(Event::Note("stopped an adb server that was holding the tablet".to_string()));
+                                stats.event(Event::Note(
+                                    "stopped an adb server that was holding the tablet".to_string(),
+                                ));
                                 continue;
                             }
-                            stats.event(Event::Note(format!("using adb.exe, because the direct connection kept failing: {what}")));
+                            stats.event(Event::Note(format!(
+                                "using adb.exe, because the direct connection kept failing: {what}"
+                            )));
                             needs_adb = true;
                         }
                     }
@@ -727,7 +793,11 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
             opened_app = false;
             direct_failed = false;
             // Gone, so the next plug-in can skip adb.exe.
-            if needs_adb && state != DeviceState::AdbMissing && state != DeviceState::Unauthorized && state != DeviceState::Offline {
+            if needs_adb
+                && state != DeviceState::AdbMissing
+                && state != DeviceState::Unauthorized
+                && state != DeviceState::Offline
+            {
                 needs_adb = false;
                 quick_since = None;
                 server_started = false;
@@ -768,7 +838,15 @@ pub fn run(options: EngineOptions, shared: Arc<Shared>) {
         let mut had_hello = false;
         let wanted_path = options.usb_path.unwrap_or_else(|| shared.settings().usb_path);
         let outcome = if wanted_path == UsbPath::Direct && !direct_failed {
-            match run_direct_session(&options, &shared, &mut injector, &mut disconnected_at, &mut recorder, open_app, &mut had_hello) {
+            match run_direct_session(
+                &options,
+                &shared,
+                &mut injector,
+                &mut disconnected_at,
+                &mut recorder,
+                open_app,
+                &mut had_hello,
+            ) {
                 Ok(outcome) => {
                     *shared.direct_problem.lock().unwrap() = None;
                     outcome

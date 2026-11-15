@@ -83,10 +83,18 @@ impl Dist {
 pub enum Event {
     TipDown,
     TipUp,
-    ButtonDown { in_contact: bool },
-    ButtonUp { in_contact: bool },
-    Connected { recovery: Option<Duration> },
-    Disconnected { why: String },
+    ButtonDown {
+        in_contact: bool,
+    },
+    ButtonUp {
+        in_contact: bool,
+    },
+    Connected {
+        recovery: Option<Duration>,
+    },
+    Disconnected {
+        why: String,
+    },
     TabletVisible,
     /// Anything else worth finding in the log later, such as why a reconnect was slow.
     Note(String),
@@ -471,7 +479,9 @@ impl Stats {
                 p.samples, p.worst_px, p.over_1px, p.jumps, p.worst_jump_px, p.timed_out
             ));
         }
-        lines.push(format!("tip edges {tip_edges} | button presses: {button_downs_hover} hovering, {button_downs_contact} in contact"));
+        lines.push(format!(
+            "tip edges {tip_edges} | button presses: {button_downs_hover} hovering, {button_downs_contact} in contact"
+        ));
         for line in lines {
             println!("{line}");
             write_log(&format!("# {line}"));

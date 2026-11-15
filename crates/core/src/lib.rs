@@ -143,9 +143,7 @@ impl UpFrame {
 
     pub fn decode(b: &[u8; UP_FRAME_LEN]) -> Option<UpFrame> {
         match b[0] {
-            KIND_PING => Some(UpFrame::Ping {
-                host_ns: u64::from_le_bytes(b[8..16].try_into().unwrap()),
-            }),
+            KIND_PING => Some(UpFrame::Ping { host_ns: u64::from_le_bytes(b[8..16].try_into().unwrap()) }),
             _ => None,
         }
     }

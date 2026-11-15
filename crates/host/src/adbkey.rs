@@ -28,7 +28,8 @@ pub fn load_or_create(dir: &Path) -> io::Result<AdbKey> {
     let private_path = dir.join("adbkey");
     let public_path = dir.join("adbkey.pub");
     let private = match fs::read_to_string(&private_path) {
-        Ok(pem) => RsaPrivateKey::from_pkcs8_pem(&pem).map_err(|e| io::Error::other(format!("can't read {}: {e}", private_path.display())))?,
+        Ok(pem) => RsaPrivateKey::from_pkcs8_pem(&pem)
+            .map_err(|e| io::Error::other(format!("can't read {}: {e}", private_path.display())))?,
         Err(e) if e.kind() == io::ErrorKind::NotFound => {
             let key = RsaPrivateKey::new(&mut rsa::rand_core::OsRng, KEY_BITS).map_err(io::Error::other)?;
             let pem = key.to_pkcs8_pem(LineEnding::LF).map_err(io::Error::other)?;
@@ -116,7 +117,15 @@ mod tests {
 
     #[test]
     fn base64_matches_the_standard_examples() {
-        for (input, encoded) in [("", ""), ("f", "Zg=="), ("fo", "Zm8="), ("foo", "Zm9v"), ("foob", "Zm9vYg=="), ("fooba", "Zm9vYmE="), ("foobar", "Zm9vYmFy")] {
+        for (input, encoded) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
             assert_eq!(base64(input.as_bytes()), encoded, "{input}");
         }
     }
@@ -140,7 +149,10 @@ mod tests {
     #[test]
     fn the_public_key_matches_the_one_adb_made() {
         let Some(dir) = key_dir() else { return };
-        let (Ok(pem), Ok(saved)) = (fs::read_to_string(dir.join("adbkey")), fs::read_to_string(dir.join("adbkey.pub"))) else { return };
+        let (Ok(pem), Ok(saved)) = (fs::read_to_string(dir.join("adbkey")), fs::read_to_string(dir.join("adbkey.pub")))
+        else {
+            return;
+        };
         let key = RsaPrivateKey::from_pkcs8_pem(&pem).unwrap();
         let ours = base64(&android_public_key(&key));
         assert_eq!(saved.split_whitespace().next().unwrap(), ours);

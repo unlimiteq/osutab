@@ -7,9 +7,9 @@
 
 mod adb;
 mod adbkey;
-mod elevation;
 mod assets;
 mod control;
+mod elevation;
 mod engine;
 mod filters;
 mod gui;
@@ -39,7 +39,9 @@ use std::time::{Duration, Instant};
 
 use windows_sys::Win32::Foundation::{GetLastError, ERROR_ALREADY_EXISTS};
 use windows_sys::Win32::System::Console::{AttachConsole, SetConsoleCtrlHandler, ATTACH_PARENT_PROCESS};
-use windows_sys::Win32::System::Threading::{CreateMutexW, GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL};
+use windows_sys::Win32::System::Threading::{
+    CreateMutexW, GetCurrentThread, SetThreadPriority, THREAD_PRIORITY_TIME_CRITICAL,
+};
 use windows_sys::Win32::UI::HiDpi::{SetProcessDpiAwarenessContext, DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2};
 use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
 
@@ -168,7 +170,10 @@ fn parse_args() -> Result<Config, String> {
             }
             "--no-tuning" => c.no_tuning = true,
             "--keep-pen-filter" => c.keep_pen_filter = true,
-            "--test-drops" => c.test_drops = Some(Duration::from_secs(value()?.parse().map_err(|_| "invalid --test-drops".to_string())?)),
+            "--test-drops" => {
+                c.test_drops =
+                    Some(Duration::from_secs(value()?.parse().map_err(|_| "invalid --test-drops".to_string())?))
+            }
             "--cpu-burn" => c.cpu_burn = Some(value()?.parse().map_err(|_| "invalid --cpu-burn".to_string())?),
             "--stall-trace" => c.stall_trace = Some(value()?.into()),
             "--ping-ms" => c.ping_ms = Some(value()?.parse().map_err(|_| "invalid --ping-ms".to_string())?),
@@ -187,10 +192,8 @@ fn find_adb(config: &Config, exe_dir: &Path) -> PathBuf {
     if let Some(p) = &config.adb {
         return p.clone();
     }
-    let candidates = [
-        exe_dir.join("platform-tools").join("adb.exe"),
-        exe_dir.join("../../tools/platform-tools/adb.exe"),
-    ];
+    let candidates =
+        [exe_dir.join("platform-tools").join("adb.exe"), exe_dir.join("../../tools/platform-tools/adb.exe")];
     candidates.into_iter().find(|p| p.exists()).unwrap_or_else(|| "adb".into())
 }
 
@@ -199,20 +202,16 @@ fn find_helper(config: &Config, exe_dir: &Path, data_dir: &Path) -> Option<PathB
         return Some(p.clone());
     }
     assets::helper(data_dir).or_else(|| {
-        let candidates = [
-            exe_dir.join("osutab-helper"),
-            exe_dir.join("../aarch64-unknown-linux-musl/release/osutab-helper"),
-        ];
+        let candidates =
+            [exe_dir.join("osutab-helper"), exe_dir.join("../aarch64-unknown-linux-musl/release/osutab-helper")];
         candidates.into_iter().find(|p| p.exists())
     })
 }
 
 fn find_app(exe_dir: &Path, data_dir: &Path) -> Option<PathBuf> {
     assets::app(data_dir).or_else(|| {
-        let candidates = [
-            exe_dir.join("osutab.apk"),
-            exe_dir.join("../../android/app/build/outputs/apk/debug/app-debug.apk"),
-        ];
+        let candidates =
+            [exe_dir.join("osutab.apk"), exe_dir.join("../../android/app/build/outputs/apk/debug/app-debug.apk")];
         candidates.into_iter().find(|p| p.exists())
     })
 }
@@ -228,10 +227,17 @@ fn read_saved_settings(path: &Path) -> (Option<Settings>, Option<String>) {
         Ok(None) => (None, None),
         Ok(Some(parsed)) if parsed.problems.is_empty() => (Some(parsed.settings), None),
         Ok(Some(parsed)) => {
-            let note = format!("Some settings couldn't be read, so they went back to their defaults: {}. {}", parsed.problems.join("; "), copy_note());
+            let note = format!(
+                "Some settings couldn't be read, so they went back to their defaults: {}. {}",
+                parsed.problems.join("; "),
+                copy_note()
+            );
             (Some(parsed.settings), Some(note))
         }
-        Err(e) => (None, Some(format!("The settings file couldn't be read ({e}), so setup is starting again. {}", copy_note()))),
+        Err(e) => (
+            None,
+            Some(format!("The settings file couldn't be read ({e}), so setup is starting again. {}", copy_note())),
+        ),
     }
 }
 
@@ -287,7 +293,7 @@ fn prune_logs(dir: &Path, keep: usize) {
         })
         .filter_map(|e| Some((e.metadata().ok()?.modified().ok()?, e.path())))
         .collect();
-    logs.sort_by(|a, b| b.0.cmp(&a.0));
+    logs.sort_by_key(|log| std::cmp::Reverse(log.0));
     for (_, path) in logs.into_iter().skip(keep) {
         let _ = fs::remove_file(path);
     }
@@ -296,7 +302,8 @@ fn prune_logs(dir: &Path, keep: usize) {
 fn open_log(dir: &Path) -> Option<File> {
     fs::create_dir_all(dir).ok()?;
     prune_logs(dir, KEPT_LOGS.saturating_sub(1));
-    let name = format!("latency-{}.csv", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs());
+    let name =
+        format!("latency-{}.csv", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_secs());
     let log_path = dir.join(name);
     match File::create(&log_path) {
         Ok(file) => {
@@ -420,7 +427,13 @@ fn main() {
 
     println!(
         "target {}x{} real pixels | grab {} | dry run {} | test mode {} | busy poll {} | helper busy {}",
-        target.width, target.height, config.grab, config.dry_run, config.test_mode, config.busy_poll, config.helper_busy
+        target.width,
+        target.height,
+        config.grab,
+        config.dry_run,
+        config.test_mode,
+        config.busy_poll,
+        config.helper_busy
     );
 
     let options = EngineOptions {
@@ -508,7 +521,7 @@ fn main() {
                 let _ = adb_at_exit.kill_server();
             }
             if let Some(mut daemon) = shared.otd_daemon.lock().unwrap().take() {
-                let _ = daemon.kill();
+                daemon.kill();
             }
             tray::stop(&shared);
             std::process::exit(0);
@@ -549,7 +562,8 @@ mod tests {
 
         prune_logs(&dir, 2);
 
-        let mut left: Vec<String> = fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
+        let mut left: Vec<String> =
+            fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect();
         left.sort();
         assert_eq!(left, ["config.toml", "latency-3.csv", "latency-4.csv", "other.csv"]);
         let _ = fs::remove_dir_all(&dir);

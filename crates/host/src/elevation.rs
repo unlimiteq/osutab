@@ -54,7 +54,13 @@ fn token_is_elevated(process: HANDLE) -> Option<bool> {
         }
         let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
         let mut size = 0u32;
-        let ok = GetTokenInformation(token, TokenElevation, &mut elevation as *mut _ as *mut _, size_of::<TOKEN_ELEVATION>() as u32, &mut size);
+        let ok = GetTokenInformation(
+            token,
+            TokenElevation,
+            &mut elevation as *mut _ as *mut _,
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut size,
+        );
         CloseHandle(token);
         (ok != 0).then_some(elevation.TokenIsElevated != 0)
     }
@@ -112,7 +118,8 @@ pub fn spawn_unelevated(exe: &Path, dir: &Path, hidden: bool) -> io::Result<Laun
             return Err(io::Error::last_os_error());
         }
         let mut primary: HANDLE = null_mut();
-        let access = TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID;
+        let access =
+            TOKEN_QUERY | TOKEN_DUPLICATE | TOKEN_ASSIGN_PRIMARY | TOKEN_ADJUST_DEFAULT | TOKEN_ADJUST_SESSIONID;
         let duplicated = DuplicateTokenEx(token, access, null(), SecurityImpersonation, TokenPrimary, &mut primary);
         CloseHandle(token);
         if duplicated == 0 {
@@ -121,13 +128,24 @@ pub fn spawn_unelevated(exe: &Path, dir: &Path, hidden: bool) -> io::Result<Laun
         let wide = |p: &Path| p.as_os_str().encode_wide().chain(std::iter::once(0)).collect::<Vec<u16>>();
         use std::os::windows::ffi::OsStrExt;
         let application = wide(exe);
-        let mut command_line: Vec<u16> = format!("\"{}\"", exe.display()).encode_utf16().chain(std::iter::once(0)).collect();
+        let mut command_line: Vec<u16> =
+            format!("\"{}\"", exe.display()).encode_utf16().chain(std::iter::once(0)).collect();
         let directory = wide(dir);
         let mut startup: STARTUPINFOW = std::mem::zeroed();
         startup.cb = size_of::<STARTUPINFOW>() as u32;
         let mut info: PROCESS_INFORMATION = std::mem::zeroed();
         let flags = CREATE_UNICODE_ENVIRONMENT | if hidden { CREATE_NO_WINDOW } else { 0 };
-        let created = CreateProcessWithTokenW(primary, 0, application.as_ptr(), command_line.as_mut_ptr(), flags, null(), directory.as_ptr(), &startup, &mut info);
+        let created = CreateProcessWithTokenW(
+            primary,
+            0,
+            application.as_ptr(),
+            command_line.as_mut_ptr(),
+            flags,
+            null(),
+            directory.as_ptr(),
+            &startup,
+            &mut info,
+        );
         let error = io::Error::last_os_error();
         CloseHandle(primary);
         if created == 0 {

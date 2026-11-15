@@ -23,3 +23,20 @@ jobs:
         run: cargo test --locked
       - name: Check the tablet helper builds
         run: cargo check --locked -p osutab-helper --target aarch64-unknown-linux-musl
+
+  lint:
+    name: Format and clippy
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Add the tablet's target and the lint tools
+        run: |
+          rustup target add aarch64-unknown-linux-musl
+          rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Check formatting
+        run: cargo fmt --all --check
+      - name: Clippy on the PC program
+        run: cargo clippy --locked --all-targets -- -D warnings
+      - name: Clippy on the tablet helper
+        run: cargo clippy --locked -p osutab-helper --target aarch64-unknown-linux-musl -- -D warnings

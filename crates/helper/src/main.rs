@@ -181,7 +181,9 @@ fn read_snapshot(file: &File) -> io::Result<PenSnapshot> {
 /// the median. It's a small program that mostly sleeps, so this costs very little battery.
 fn prefer_fast_cores() {
     let speeds: Vec<u64> = (0..64)
-        .map_while(|core| fs::read_to_string(format!("/sys/devices/system/cpu/cpu{core}/cpufreq/cpuinfo_max_freq")).ok())
+        .map_while(|core| {
+            fs::read_to_string(format!("/sys/devices/system/cpu/cpu{core}/cpufreq/cpuinfo_max_freq")).ok()
+        })
         .filter_map(|text| text.trim().parse().ok())
         .collect();
     if let Some(mask) = fast_core_mask(&speeds) {
@@ -280,7 +282,7 @@ fn serve(pen: &mut File, sock: &mut UnixStream, busy: bool, ping_timeout_ms: Opt
         }
         if fds[0].revents != 0 {
             let n = pen.read(&mut events)?;
-            for ev in events[..n].chunks_exact(EVENT_SIZE) {
+            for ev in events[..n].as_chunks::<EVENT_SIZE>().0 {
                 let sec = i64::from_ne_bytes(ev[0..8].try_into().unwrap());
                 let usec = i64::from_ne_bytes(ev[8..16].try_into().unwrap());
                 let ev_type = u16::from_ne_bytes(ev[16..18].try_into().unwrap());
@@ -321,13 +323,15 @@ fn run() -> io::Result<()> {
     let args: Vec<String> = std::env::args().collect();
     let busy = args.iter().any(|a| a == "--busy");
     let watch = args.iter().any(|a| a == "--watch");
-    let burst = args.iter().position(|a| a == "--burst").and_then(|i| {
-        Some((args.get(i + 1)?.parse::<u64>().ok()?, args.get(i + 2)?.parse::<u64>().ok()?))
-    });
+    let burst = args
+        .iter()
+        .position(|a| a == "--burst")
+        .and_then(|i| Some((args.get(i + 1)?.parse::<u64>().ok()?, args.get(i + 2)?.parse::<u64>().ok()?)));
     if !args.iter().any(|a| a == "--any-core") {
         prefer_fast_cores();
     }
-    let ping_timeout_ms = args.iter().position(|a| a == "--ping-timeout-ms").and_then(|i| args.get(i + 1)?.parse::<i32>().ok());
+    let ping_timeout_ms =
+        args.iter().position(|a| a == "--ping-timeout-ms").and_then(|i| args.get(i + 1)?.parse::<i32>().ok());
     let mut pen = find_pen()?;
     let fd = pen.as_raw_fd();
     let clock = CLOCK_MONOTONIC;

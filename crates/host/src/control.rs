@@ -10,8 +10,8 @@ use std::time::{Duration, Instant};
 use crate::mapping::{ActiveArea, AreaMm, Rotation, TABLET_LONG_MM};
 use crate::otd;
 use crate::settings::{Output, Settings, MIN_AREA_MM};
-use crate::theme::Rgb;
 use crate::shared::{LiveConfig, Shared};
+use crate::theme::Rgb;
 
 pub const APP_PORT: u16 = 27192;
 const POLL: Duration = Duration::from_millis(30);
@@ -35,10 +35,26 @@ fn rotation_degrees(rotation: Rotation) -> u32 {
 /// What the tablet app is told. The sizes are the fitted ones, so it draws what's really in use.
 pub fn state_line(settings: &Settings, live: &LiveConfig, screen_width: f64, screen_aspect: f64) -> String {
     let name = &settings.presets[settings.active].name;
-    area_line(&live.area, settings.area().rotation_deg, live.rotation, settings.aspect_lock, screen_width, screen_aspect, name)
+    area_line(
+        &live.area,
+        settings.area().rotation_deg,
+        live.rotation,
+        settings.aspect_lock,
+        screen_width,
+        screen_aspect,
+        name,
+    )
 }
 
-fn area_line(a: &ActiveArea, rotation_deg: f64, rotation: Rotation, aspect_lock: bool, screen_width: f64, screen_aspect: f64, name: &str) -> String {
+fn area_line(
+    a: &ActiveArea,
+    rotation_deg: f64,
+    rotation: Rotation,
+    aspect_lock: bool,
+    screen_width: f64,
+    screen_aspect: f64,
+    name: &str,
+) -> String {
     format!(
         "state {} {} {} {} {} {} {} {} {} {} {} {}\n",
         a.width_mm,
@@ -59,7 +75,15 @@ fn area_line(a: &ActiveArea, rotation_deg: f64, rotation: Rotation, aspect_lock:
 /// OpenTabletDriver's area, drawn the same way, for when it's the one in use.
 pub fn otd_state_line(area: &otd::OtdArea, rotation: Rotation) -> String {
     let view = otd::area_in_view(area, rotation);
-    area_line(&view.resolve(rotation), view.rotation_deg, rotation, false, area.display_width, area.display_width / area.display_height, "OpenTabletDriver")
+    area_line(
+        &view.resolve(rotation),
+        view.rotation_deg,
+        rotation,
+        false,
+        area.display_width,
+        area.display_width / area.display_height,
+        "OpenTabletDriver",
+    )
 }
 
 /// Colors without the `#`, then outline thickness, outside darkness and whether to animate.
@@ -253,7 +277,12 @@ mod tests {
 
     #[test]
     fn prefs_line_matches_what_the_app_parses() {
-        let mut settings = Settings { hold_to_edit_seconds: 1.5, edit_timeout_seconds: 30.0, show_area_label: false, ..Settings::default() };
+        let mut settings = Settings {
+            hold_to_edit_seconds: 1.5,
+            edit_timeout_seconds: 30.0,
+            show_area_label: false,
+            ..Settings::default()
+        };
         // The exact form the Kotlin test checks on the other side.
         assert_eq!(prefs_line(&settings, true), "prefs 0 1500 30000 1 1\n");
         settings.output = Output::OpenTabletDriver;
@@ -270,7 +299,15 @@ mod tests {
 
     #[test]
     fn the_otd_area_is_sent_in_the_same_form() {
-        let area = otd::OtdArea { width: 200.0, height: 125.0, x: 100.0, y: 133.39, rotation: 0.0, display_width: 2560.0, display_height: 1600.0 };
+        let area = otd::OtdArea {
+            width: 200.0,
+            height: 125.0,
+            x: 100.0,
+            y: 133.39,
+            rotation: 0.0,
+            display_width: 2560.0,
+            display_height: 1600.0,
+        };
         let line = otd_state_line(&area, Rotation::R90);
         let parts: Vec<&str> = line.trim().splitn(13, ' ').collect();
         assert_eq!(parts.len(), 13);
@@ -372,7 +409,8 @@ mod tests {
     fn state_line_matches_what_the_app_parses() {
         let mut settings = Settings { rotation: Some(Rotation::R90), ..Settings::default() };
         settings.save_preset("My preset name").unwrap();
-        *settings.area_mut() = AreaMm { width: 120.0, height: 75.0, offset_x: 10.0, offset_y: -5.0, rotation_deg: 15.0 };
+        *settings.area_mut() =
+            AreaMm { width: 120.0, height: 75.0, offset_x: 10.0, offset_y: -5.0, rotation_deg: 15.0 };
         let screen = crate::mapping::Rect { left: 0.0, top: 0.0, width: 2560.0, height: 1600.0 };
         let live = LiveConfig {
             output: Output::Direct,

@@ -38,7 +38,7 @@ fn icon_bitmap(size: u32) -> Vec<u8> {
     out.extend_from_slice(&32u16.to_le_bytes());
     out.extend_from_slice(&[0u8; 24]);
     for row in rgba.chunks_exact(size as usize * 4).rev() {
-        for pixel in row.chunks_exact(4) {
+        for pixel in row.as_chunks::<4>().0 {
             out.extend_from_slice(&[pixel[2], pixel[1], pixel[0], pixel[3]]);
         }
     }

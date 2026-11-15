@@ -440,12 +440,19 @@ fn color(value: &str) -> Result<Rgb, String> {
 }
 
 fn optional_color_value(value: &str) -> Result<Option<Rgb>, String> {
-    if value.is_empty() { Ok(None) } else { color(value).map(Some) }
+    if value.is_empty() {
+        Ok(None)
+    } else {
+        color(value).map(Some)
+    }
 }
 
 fn thickness(value: &str) -> Result<f32, String> {
     let v = number(value)? as f32;
-    (MIN_THICKNESS..=MAX_THICKNESS).contains(&v).then_some(v).ok_or(format!("must be from {MIN_THICKNESS} to {MAX_THICKNESS}"))
+    (MIN_THICKNESS..=MAX_THICKNESS)
+        .contains(&v)
+        .then_some(v)
+        .ok_or(format!("must be from {MIN_THICKNESS} to {MAX_THICKNESS}"))
 }
 
 fn dim(value: &str) -> Result<u8, String> {
@@ -490,7 +497,13 @@ struct Legacy {
     found: bool,
 }
 
-fn top_level_field(s: &mut Settings, active: &mut Option<String>, legacy: &mut Legacy, key: &str, value: &str) -> Result<(), String> {
+fn top_level_field(
+    s: &mut Settings,
+    active: &mut Option<String>,
+    legacy: &mut Legacy,
+    key: &str,
+    value: &str,
+) -> Result<(), String> {
     let o = &mut s.theme_overrides;
     match key {
         "output" => s.output = Output::parse(value).ok_or(format!("unknown output {value}"))?,
@@ -736,7 +749,9 @@ pub fn ask(input: &mut impl BufRead, output: &mut impl Write, screen_aspect: f64
     let height = ask_mm(
         input,
         output,
-        &format!("Height in mm, up to {max_h:.0} (just press Enter for {matching:.1}, which matches your screen's shape): "),
+        &format!(
+            "Height in mm, up to {max_h:.0} (just press Enter for {matching:.1}, which matches your screen's shape): "
+        ),
         matching,
         MIN_AREA_MM,
         max_h,
@@ -817,7 +832,13 @@ mod tests {
                     Preset { name: "Default".into(), area: full_area() },
                     Preset {
                         name: "Small jumps = 90 mm".into(),
-                        area: AreaMm { width: 120.5, height: 75.25, offset_x: -3.5, offset_y: 10.0, rotation_deg: 12.5 },
+                        area: AreaMm {
+                            width: 120.5,
+                            height: 75.25,
+                            offset_x: -3.5,
+                            offset_y: 10.0,
+                            rotation_deg: 12.5,
+                        },
                     },
                 ],
                 active: 1,
@@ -843,7 +864,14 @@ mod tests {
                 screen_pinning: true,
                 usb_path: UsbPath::Direct,
                 filters: FilterSettings {
-                    radial: filters::RadialFollow { on: true, outer_radius_mm: 2.5, inner_radius_mm: 0.35, smoothing: 0.875, soft_knee: 12.0, leak: 0.25 },
+                    radial: filters::RadialFollow {
+                        on: true,
+                        outer_radius_mm: 2.5,
+                        inner_radius_mm: 0.35,
+                        smoothing: 0.875,
+                        soft_knee: 12.0,
+                        leak: 0.25,
+                    },
                     time: filters::TimeSmoothing { on: true, ms: 7.5 },
                 },
             };

@@ -98,13 +98,8 @@ pub fn otd_bench(seconds: u64, target: Rect) {
     while start.elapsed() < Duration::from_secs(seconds) {
         position = (position + 0.002) % 1.0;
         let (x, y) = (0.25 + position * 0.5, 0.25 + ((position * 7.0) % 1.0) * 0.5);
-        let sample = Sample {
-            seq,
-            flags: FLAG_IN_RANGE,
-            x: (x * MAX_X) as u16,
-            y: (y * MAX_Y) as u16,
-            ..Sample::default()
-        };
+        let sample =
+            Sample { seq, flags: FLAG_IN_RANGE, x: (x * MAX_X) as u16, y: (y * MAX_Y) as u16, ..Sample::default() };
         seq = seq.wrapping_add(1);
         let before = inject::cursor_position();
         let t0 = Instant::now();
@@ -135,7 +130,11 @@ pub fn otd_bench(seconds: u64, target: Rect) {
     }
     inject::set_cursor_position(start_cursor.0, start_cursor.1);
     let moves = times.len().max(1) as f64;
-    println!("cursor was on average {:.1} px right and {:.1} px down of the report's position", offset_sum.0 / moves, offset_sum.1 / moves);
+    println!(
+        "cursor was on average {:.1} px right and {:.1} px down of the report's position",
+        offset_sum.0 / moves,
+        offset_sum.1 / moves
+    );
     let d = Dist::of(&mut times);
     println!(
         "report sent to cursor moved, ms: p50 {:.3} p90 {:.3} p99 {:.3} p99.9 {:.3} max {:.3} (n={}), no move within {} ms: {timeouts}",
@@ -195,6 +194,9 @@ pub fn run(target: Rect) -> bool {
     );
     inject::set_cursor_position(start.0, start.1);
     let passed = worst.max(worst_jump) <= 1.0;
-    println!("{}", if passed { "PASS: every position within 1 px" } else { "FAIL: some positions were more than 1 px off" });
+    println!(
+        "{}",
+        if passed { "PASS: every position within 1 px" } else { "FAIL: some positions were more than 1 px off" }
+    );
     passed
 }

@@ -209,7 +209,8 @@ impl Adb {
     /// Installs the tablet app if it isn't there or this APK differs from the installed one.
     pub fn ensure_app(&self, apk: &Path) -> io::Result<()> {
         let wanted = app_stamp(apk)?;
-        let installed = self.output(&["shell", &format!("pm path {APP_PACKAGE}; cat {APP_STAMP} 2>/dev/null")]).unwrap_or_default();
+        let installed =
+            self.output(&["shell", &format!("pm path {APP_PACKAGE}; cat {APP_STAMP} 2>/dev/null")]).unwrap_or_default();
         if installed.contains("package:") && installed.contains(&wanted) {
             return Ok(());
         }
@@ -249,7 +250,13 @@ impl Adb {
             .stderr(Stdio::piped())
             .spawn()?;
         // The helper's messages only matter when someone is watching a console.
-        for stream in [child.stdout.take().map(|s| Box::new(s) as Box<dyn io::Read + Send>), child.stderr.take().map(|s| Box::new(s) as Box<dyn io::Read + Send>)].into_iter().flatten() {
+        for stream in [
+            child.stdout.take().map(|s| Box::new(s) as Box<dyn io::Read + Send>),
+            child.stderr.take().map(|s| Box::new(s) as Box<dyn io::Read + Send>),
+        ]
+        .into_iter()
+        .flatten()
+        {
             std::thread::spawn(move || {
                 for line in BufReader::new(stream).lines().map_while(Result::ok) {
                     println!("{line}");
@@ -286,7 +293,11 @@ mod tests {
 
     #[test]
     fn the_app_starts_afresh_and_full_screen() {
-        assert!(open_app_command().starts_with("am start -S --windowingMode 1 -n dev.osutab.app/.MainActivity 2>&1"), "{}", open_app_command());
+        assert!(
+            open_app_command().starts_with("am start -S --windowingMode 1 -n dev.osutab.app/.MainActivity 2>&1"),
+            "{}",
+            open_app_command()
+        );
     }
 
     #[test]
@@ -357,7 +368,10 @@ mod tests {
     #[test]
     fn device_states_from_real_adb_output() {
         assert_eq!(parse_state("device\n", ""), DeviceState::Ready);
-        assert_eq!(parse_state("", "error: device unauthorized.\nThis adb server's $ADB_VENDOR_KEYS is not set"), DeviceState::Unauthorized);
+        assert_eq!(
+            parse_state("", "error: device unauthorized.\nThis adb server's $ADB_VENDOR_KEYS is not set"),
+            DeviceState::Unauthorized
+        );
         assert_eq!(parse_state("", "error: device offline"), DeviceState::Offline);
         assert_eq!(parse_state("", "error: no devices/emulators found"), DeviceState::NoDevice);
     }

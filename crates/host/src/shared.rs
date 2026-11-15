@@ -84,7 +84,12 @@ pub struct Shared {
     save_lock: Mutex<()>,
 }
 
-fn build_live(settings: &Settings, overrides: &Overrides, screen_rotation: Rotation, display: (Rect, Rect)) -> LiveConfig {
+fn build_live(
+    settings: &Settings,
+    overrides: &Overrides,
+    screen_rotation: Rotation,
+    display: (Rect, Rect),
+) -> LiveConfig {
     let rotation = overrides.rotation.or(settings.rotation).unwrap_or(screen_rotation);
     LiveConfig {
         output: settings.output,
@@ -318,10 +323,17 @@ mod tests {
 
         let forced = shared(
             Settings { rotation: Some(Rotation::R90), ..Settings::default() },
-            Overrides { rotation: Some(Rotation::R0), tip_click: Some(false), button_keys: crate::keys::Combo::new(&[0x2c]) },
+            Overrides {
+                rotation: Some(Rotation::R0),
+                tip_click: Some(false),
+                button_keys: crate::keys::Combo::new(&[0x2c]),
+            },
         );
         let live = forced.live_config();
-        assert_eq!((live.rotation, live.tip_click, live.button_keys), (Rotation::R0, false, crate::keys::Combo::new(&[0x2c])));
+        assert_eq!(
+            (live.rotation, live.tip_click, live.button_keys),
+            (Rotation::R0, false, crate::keys::Combo::new(&[0x2c]))
+        );
     }
 
     #[test]
@@ -334,7 +346,13 @@ mod tests {
     #[test]
     fn device_state_round_trips() {
         let s = shared(Settings::default(), Overrides::default());
-        for state in [DeviceState::AdbMissing, DeviceState::NoDevice, DeviceState::Unauthorized, DeviceState::Offline, DeviceState::Ready] {
+        for state in [
+            DeviceState::AdbMissing,
+            DeviceState::NoDevice,
+            DeviceState::Unauthorized,
+            DeviceState::Offline,
+            DeviceState::Ready,
+        ] {
             s.set_device_state(state);
             assert_eq!(s.device_state(), state);
         }

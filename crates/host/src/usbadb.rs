@@ -153,7 +153,9 @@ fn interface_paths(guid: &GUID) -> Vec<Vec<u16>> {
 
 fn find_adb_interface() -> Option<Vec<u16>> {
     [(GUID_ADB_DEVICE, true), (GUID_WINUSB_DEVICE, false)].iter().find_map(|(guid, android_interface)| {
-        interface_paths(guid).into_iter().find(|p| is_adb_interface(&String::from_utf16_lossy(&p[..p.len() - 1]), *android_interface))
+        interface_paths(guid)
+            .into_iter()
+            .find(|p| is_adb_interface(&String::from_utf16_lossy(&p[..p.len() - 1]), *android_interface))
     })
 }
 
@@ -241,7 +243,8 @@ unsafe impl Sync for UsbPipes {}
 
 impl UsbPipes {
     pub fn open() -> io::Result<UsbPipes> {
-        let path = find_adb_interface().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no ADB interface found"))?;
+        let path =
+            find_adb_interface().ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no ADB interface found"))?;
         unsafe {
             let device = CreateFileW(
                 path.as_ptr(),
@@ -261,7 +264,8 @@ impl UsbPipes {
                 CloseHandle(device);
                 return Err(e);
             }
-            let mut pipes = UsbPipes { device, winusb, pipe_in: 0, pipe_out: 0, usb3: false, send_lock: Mutex::new(()) };
+            let mut pipes =
+                UsbPipes { device, winusb, pipe_in: 0, pipe_out: 0, usb3: false, send_lock: Mutex::new(()) };
             let mut info: WINUSB_PIPE_INFORMATION = zeroed();
             let mut index = 0;
             while WinUsb_QueryPipe(winusb, 0, index, &mut info) != 0 {
@@ -292,7 +296,15 @@ impl UsbPipes {
 
     /// How long a read may wait, or 0 to wait for as long as it takes.
     fn set_read_timeout(&self, ms: u32) -> io::Result<()> {
-        let ok = unsafe { WinUsb_SetPipePolicy(self.winusb, self.pipe_in, PIPE_TRANSFER_TIMEOUT, size_of::<u32>() as u32, &ms as *const u32 as *const _) };
+        let ok = unsafe {
+            WinUsb_SetPipePolicy(
+                self.winusb,
+                self.pipe_in,
+                PIPE_TRANSFER_TIMEOUT,
+                size_of::<u32>() as u32,
+                &ms as *const u32 as *const _,
+            )
+        };
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -301,7 +313,9 @@ impl UsbPipes {
 
     pub fn read(&self, buffer: &mut [u8]) -> io::Result<usize> {
         let mut got = 0u32;
-        let ok = unsafe { WinUsb_ReadPipe(self.winusb, self.pipe_in, buffer.as_mut_ptr(), buffer.len() as u32, &mut got, null_mut()) };
+        let ok = unsafe {
+            WinUsb_ReadPipe(self.winusb, self.pipe_in, buffer.as_mut_ptr(), buffer.len() as u32, &mut got, null_mut())
+        };
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -310,7 +324,9 @@ impl UsbPipes {
 
     pub fn write(&self, buffer: &[u8]) -> io::Result<()> {
         let mut sent = 0u32;
-        let ok = unsafe { WinUsb_WritePipe(self.winusb, self.pipe_out, buffer.as_ptr(), buffer.len() as u32, &mut sent, null_mut()) };
+        let ok = unsafe {
+            WinUsb_WritePipe(self.winusb, self.pipe_out, buffer.as_ptr(), buffer.len() as u32, &mut sent, null_mut())
+        };
         if ok == 0 {
             return Err(io::Error::last_os_error());
         }
@@ -388,7 +404,10 @@ pub fn handshake(pipes: &UsbPipes, key: &AdbKey, waiting: &mut dyn FnMut() -> bo
             },
             Err(e) if e.raw_os_error() == Some(ERROR_SEM_TIMEOUT_CODE) && offered.is_some() => {
                 if offered.is_some_and(|t| t.elapsed() >= PROMPT_LIMIT) || !waiting() {
-                    return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the tablet hasn't allowed this PC yet"));
+                    return Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "the tablet hasn't allowed this PC yet",
+                    ));
                 }
             }
             Err(e) => return Err(e),
@@ -405,7 +424,9 @@ pub fn open_stream(pipes: &UsbPipes, local_id: u32, service: &str, buffer: &mut 
         let (header, _) = read_message(pipes, buffer)?;
         match header.command {
             A_OKAY if header.arg1 == local_id => return Ok(header.arg0),
-            A_CLSE if header.arg1 == local_id => return Err(io::Error::new(io::ErrorKind::ConnectionRefused, "the tablet refused the stream")),
+            A_CLSE if header.arg1 == local_id => {
+                return Err(io::Error::new(io::ErrorKind::ConnectionRefused, "the tablet refused the stream"))
+            }
             A_WRTE => pipes.send(A_OKAY, header.arg1, header.arg0, &[])?,
             _ => {}
         }
@@ -482,7 +503,11 @@ impl DirectLink {
 
     /// The same without adb.exe, which skips the seconds it takes to start. Anything the tablet is
     /// missing goes there over this connection first.
-    pub fn start_quick(plan: &QuickStart, key: &AdbKey, waiting: &mut dyn FnMut() -> bool) -> Result<QuickStarted, QuickStartError> {
+    pub fn start_quick(
+        plan: &QuickStart,
+        key: &AdbKey,
+        waiting: &mut dyn FnMut() -> bool,
+    ) -> Result<QuickStarted, QuickStartError> {
         let pipes = UsbPipes::open().map_err(|e| match e.raw_os_error() {
             Some(ERROR_ACCESS_DENIED_CODE | ERROR_SHARING_VIOLATION_CODE) => QuickStartError::Busy,
             _ => QuickStartError::Failed(e),
@@ -510,7 +535,12 @@ impl DirectLink {
         link.shell_output(LAST_COMMAND_STREAM, command)
     }
 
-    fn connected(pipes: Arc<UsbPipes>, app_port: u16, key: &AdbKey, waiting: &mut dyn FnMut() -> bool) -> io::Result<DirectLink> {
+    fn connected(
+        pipes: Arc<UsbPipes>,
+        app_port: u16,
+        key: &AdbKey,
+        waiting: &mut dyn FnMut() -> bool,
+    ) -> io::Result<DirectLink> {
         pipes.set_read_timeout(SETUP_TIMEOUT_MS)?;
         let max_payload = handshake(&pipes, key, waiting)?;
         Ok(DirectLink {
@@ -569,7 +599,8 @@ impl DirectLink {
         if let Some(apk) = plan.app {
             self.push(TEMP_APK, 0o100644, &std::fs::read(apk)?)?;
             // -r keeps the app's data, and -d allows going back to an older build.
-            let said = self.shell_output(SETUP_STREAM, &format!("pm install -r -d {TEMP_APK} 2>&1; rm -f {TEMP_APK}"))?;
+            let said =
+                self.shell_output(SETUP_STREAM, &format!("pm install -r -d {TEMP_APK} 2>&1; rm -f {TEMP_APK}"))?;
             if !said.contains("Success") {
                 return Err(io::Error::other(format!("installing the tablet app failed: {}", said.trim())));
             }
@@ -606,7 +637,10 @@ impl DirectLink {
             while reply.len() < 8 + length {
                 self.read_stream(SYNC_STREAM, &mut reply)?;
             }
-            Err(io::Error::other(format!("copying {path} to the tablet failed: {}", String::from_utf8_lossy(&reply[8..8 + length]))))
+            Err(io::Error::other(format!(
+                "copying {path} to the tablet failed: {}",
+                String::from_utf8_lossy(&reply[8..8 + length])
+            )))
         };
         let _ = self.write_stream(SYNC_STREAM, remote, b"QUIT\0\0\0\0", &mut reply);
         let _ = self.pipes.send(A_CLSE, SYNC_STREAM, remote, &[]);
@@ -704,7 +738,12 @@ impl DirectLink {
             let (header, len) = read_message(&self.pipes, &mut self.buffer)?;
             match header.command {
                 A_OKAY if header.arg1 == local => return Ok(header.arg0),
-                A_CLSE if header.arg1 == local => return Err(io::Error::new(io::ErrorKind::ConnectionRefused, format!("the tablet refused {service}"))),
+                A_CLSE if header.arg1 == local => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::ConnectionRefused,
+                        format!("the tablet refused {service}"),
+                    ))
+                }
                 _ => self.handle_other(header, len)?,
             }
         }
@@ -841,11 +880,18 @@ pub fn bench(seconds: u64) -> io::Result<()> {
     const PERIOD: Duration = Duration::from_micros(2080);
 
     let pipes = Arc::new(UsbPipes::open()?);
-    let key = crate::adbkey::load_or_create(&crate::adbkey::key_dir().ok_or_else(|| io::Error::other("no user profile folder"))?)?;
+    let key = crate::adbkey::load_or_create(
+        &crate::adbkey::key_dir().ok_or_else(|| io::Error::other("no user profile folder"))?,
+    )?;
     handshake(&pipes, &key, &mut || false)?;
     println!("connected to the tablet directly over USB");
     let mut buffer = vec![0u8; READ_BUFFER];
-    open_stream(&pipes, HELPER_STREAM, "shell:pkill -x osutab-helper; exec /data/local/tmp/osutab-helper --no-grab", &mut buffer)?;
+    open_stream(
+        &pipes,
+        HELPER_STREAM,
+        "shell:pkill -x osutab-helper; exec /data/local/tmp/osutab-helper --no-grab",
+        &mut buffer,
+    )?;
 
     let start_wait = Instant::now();
     let remote = loop {

@@ -7,17 +7,10 @@ use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
 
 /// Which of the known apps these process names belong to, in a fixed order, without repeats.
 pub fn interfering<'a>(process_names: impl Iterator<Item = &'a str>) -> Vec<&'static str> {
-    const KNOWN: [(&str, &str); 3] = [
-        ("powertoys", "PowerToys"),
-        ("wallpaper", "Wallpaper Engine"),
-        ("nvidia overlay", "NVIDIA overlay"),
-    ];
+    const KNOWN: [(&str, &str); 3] =
+        [("powertoys", "PowerToys"), ("wallpaper", "Wallpaper Engine"), ("nvidia overlay", "NVIDIA overlay")];
     let names: Vec<String> = process_names.map(str::to_lowercase).collect();
-    KNOWN
-        .iter()
-        .filter(|(prefix, _)| names.iter().any(|n| n.starts_with(prefix)))
-        .map(|(_, label)| *label)
-        .collect()
+    KNOWN.iter().filter(|(prefix, _)| names.iter().any(|n| n.starts_with(prefix))).map(|(_, label)| *label).collect()
 }
 
 pub fn process_names() -> Vec<String> {
@@ -54,10 +47,7 @@ mod tests {
             "NVIDIA Overlay.exe",
             "osu!.exe",
         ];
-        assert_eq!(
-            interfering(names.iter().copied()),
-            vec!["PowerToys", "Wallpaper Engine", "NVIDIA overlay"]
-        );
+        assert_eq!(interfering(names.iter().copied()), vec!["PowerToys", "Wallpaper Engine", "NVIDIA overlay"]);
     }
 
     #[test]

@@ -10,7 +10,9 @@ use std::time::{Duration, Instant};
 
 use eframe::egui::{self, Color32, FontFamily, Pos2, RichText, Stroke, Vec2};
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use windows_sys::Win32::Graphics::Dwm::{DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR};
+use windows_sys::Win32::Graphics::Dwm::{
+    DwmSetWindowAttribute, DWMWA_BORDER_COLOR, DWMWA_CAPTION_COLOR, DWMWA_TEXT_COLOR,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::*;
 use winit::platform::windows::EventLoopBuilderExtWindows;
 
@@ -163,12 +165,11 @@ fn lazer_check(input: Option<LazerInput>) -> Option<Check> {
 /// Display settings that hold input back in lazer. No value means nothing to say.
 fn display_checks(display: &LazerDisplay) -> Vec<Check> {
     let mut checks = Vec::new();
-    match display.frame_sync.as_deref() {
-        Some("VSync") => checks.push(warn(
-            "osu!lazer: Frame limiter is VSync",
-            "It holds each frame back for your display, which delays the cursor. Unlimited has the least delay: Settings > Graphics.",
-        )),
-        Some(_) | None => {}
+    if let Some("VSync") = display.frame_sync.as_deref() {
+        checks.push(warn(
+        "osu!lazer: Frame limiter is VSync",
+        "It holds each frame back for your display, which delays the cursor. Unlimited has the least delay: Settings > Graphics.",
+    ))
     }
     match display.window_mode.as_deref() {
         Some(mode) if mode != "Fullscreen" => checks.push(warn(
@@ -222,7 +223,12 @@ fn shown_connected(connected: bool, last_seen_ago: Option<Duration>) -> bool {
 }
 
 /// The tablet app's window. It only lines up with the pen at full screen.
-fn app_check(tablet_connected: bool, app_connected: bool, floating: bool, missing_for: Option<Duration>) -> Option<Check> {
+fn app_check(
+    tablet_connected: bool,
+    app_connected: bool,
+    floating: bool,
+    missing_for: Option<Duration>,
+) -> Option<Check> {
     if !tablet_connected {
         return None;
     }
@@ -247,7 +253,11 @@ fn freeze_check(last: Option<(Duration, f32, &str)>) -> Option<Check> {
     if ago > FREEZE_SHOWN_FOR || ms < NOTICEABLE_FREEZE_MS {
         return None;
     }
-    let when = if ago < Duration::from_secs(90) { "Just now".to_string() } else { format!("{} minutes ago", ago.as_secs() / 60) };
+    let when = if ago < Duration::from_secs(90) {
+        "Just now".to_string()
+    } else {
+        format!("{} minutes ago", ago.as_secs() / 60)
+    };
     Some(warn(
         format!("Windows held up the cursor for {:.1} s", ms / 1000.0),
         format!("{when}, with {program} in front. A program that watches the mouse, such as an overlay, a macro tool, or mouse or lighting software, is the usual cause. Closing it usually fixes this."),
@@ -447,7 +457,8 @@ fn page_header(ui: &mut egui::Ui, title: &str, subtitle: &str, palette: &Palette
 
 /// Only there when there's something to reset.
 fn reset_button(ui: &mut egui::Ui, changed_from_default: bool, palette: &Palette) -> bool {
-    changed_from_default && ui.add(egui::Button::new(RichText::new("Reset").color(palette.muted).small()).frame(false)).clicked()
+    changed_from_default
+        && ui.add(egui::Button::new(RichText::new("Reset").color(palette.muted).small()).frame(false)).clicked()
 }
 
 fn toggle(ui: &mut egui::Ui, on: &mut bool, accent: Color32) -> egui::Response {
@@ -484,24 +495,28 @@ fn row_slider(ui: &mut egui::Ui, slider: egui::Slider, palette: &Palette) -> egu
 /// A row of options with one chosen. Says whether the choice changed.
 fn segmented<T: Copy + PartialEq>(ui: &mut egui::Ui, value: &mut T, options: &[(T, &str)], palette: &Palette) -> bool {
     let mut changed = false;
-    egui::Frame::new().fill(palette.soft).corner_radius(WIDGET_RADIUS).inner_margin(egui::Margin::same(3)).show(ui, |ui| {
-        ui.spacing_mut().item_spacing.x = 2.0;
-        ui.spacing_mut().interact_size.y = 24.0;
-        ui.spacing_mut().button_padding = Vec2::new(10.0, 3.0);
-        ui.horizontal(|ui| {
-            let reversed = ui.layout().prefer_right_to_left();
-            let ordered: Vec<_> = if reversed { options.iter().rev().collect() } else { options.iter().collect() };
-            for (option, name) in ordered {
-                let chosen = *value == *option;
-                let text = if chosen { strong(*name) } else { RichText::new(*name).color(palette.muted) };
-                let fill = if chosen { palette.raised } else { Color32::TRANSPARENT };
-                if ui.add(egui::Button::new(text).fill(fill).corner_radius(WIDGET_RADIUS - 2)).clicked() && !chosen {
-                    *value = *option;
-                    changed = true;
+    egui::Frame::new().fill(palette.soft).corner_radius(WIDGET_RADIUS).inner_margin(egui::Margin::same(3)).show(
+        ui,
+        |ui| {
+            ui.spacing_mut().item_spacing.x = 2.0;
+            ui.spacing_mut().interact_size.y = 24.0;
+            ui.spacing_mut().button_padding = Vec2::new(10.0, 3.0);
+            ui.horizontal(|ui| {
+                let reversed = ui.layout().prefer_right_to_left();
+                let ordered: Vec<_> = if reversed { options.iter().rev().collect() } else { options.iter().collect() };
+                for (option, name) in ordered {
+                    let chosen = *value == *option;
+                    let text = if chosen { strong(*name) } else { RichText::new(*name).color(palette.muted) };
+                    let fill = if chosen { palette.raised } else { Color32::TRANSPARENT };
+                    if ui.add(egui::Button::new(text).fill(fill).corner_radius(WIDGET_RADIUS - 2)).clicked() && !chosen
+                    {
+                        *value = *option;
+                        changed = true;
+                    }
                 }
-            }
-        });
-    });
+            });
+        },
+    );
     changed
 }
 
@@ -510,7 +525,11 @@ fn nav_icon(painter: &egui::Painter, tab: Tab, c: Pos2, color: Color32) {
     let at = |x: f32, y: f32| c + Vec2::new(x, y);
     match tab {
         Tab::Play => {
-            painter.add(egui::Shape::convex_polygon(vec![at(-4.0, -6.0), at(6.5, 0.0), at(-4.0, 6.0)], color, Stroke::new(1.0_f32, color)));
+            painter.add(egui::Shape::convex_polygon(
+                vec![at(-4.0, -6.0), at(6.5, 0.0), at(-4.0, 6.0)],
+                color,
+                Stroke::new(1.0_f32, color),
+            ));
         }
         Tab::Area => {
             let rect = egui::Rect::from_center_size(c, Vec2::new(16.0, 11.0));
@@ -518,7 +537,15 @@ fn nav_icon(painter: &egui::Painter, tab: Tab, c: Pos2, color: Color32) {
             painter.circle_filled(c, 1.8, color);
         }
         Tab::Latency => {
-            let bolt = vec![at(1.5, -7.0), at(-4.5, 1.0), at(0.0, 1.0), at(-1.5, 7.0), at(4.5, -1.0), at(0.0, -1.0), at(1.5, -7.0)];
+            let bolt = vec![
+                at(1.5, -7.0),
+                at(-4.5, 1.0),
+                at(0.0, 1.0),
+                at(-1.5, 7.0),
+                at(4.5, -1.0),
+                at(0.0, -1.0),
+                at(1.5, -7.0),
+            ];
             painter.add(egui::Shape::line(bolt, stroke));
         }
         Tab::Precision => {
@@ -578,18 +605,28 @@ struct App {
 
 impl App {
     fn seconds(&self, wanted: f32) -> f32 {
-        if self.animations { wanted } else { 0.0 }
+        if self.animations {
+            wanted
+        } else {
+            0.0
+        }
     }
 
     /// Draws a card, and says how tall its content wanted to be.
     fn sized_card(&mut self, ui: &mut egui::Ui, min_height: f32, add: impl FnOnce(&mut Self, &mut egui::Ui)) -> f32 {
         let palette = self.palette;
-        let mut frame = egui::Frame::new().fill(palette.panel).corner_radius(CARD_RADIUS).inner_margin(egui::Margin::same(18));
+        let mut frame =
+            egui::Frame::new().fill(palette.panel).corner_radius(CARD_RADIUS).inner_margin(egui::Margin::same(18));
         if palette.edges {
             frame = frame.stroke(Stroke::new(1.0_f32, palette.line));
         }
         if palette.light {
-            frame = frame.shadow(egui::Shadow { offset: [0, 1], blur: 10, spread: 0, color: Color32::from_black_alpha(18) });
+            frame = frame.shadow(egui::Shadow {
+                offset: [0, 1],
+                blur: 10,
+                spread: 0,
+                color: Color32::from_black_alpha(18),
+            });
         }
         let mut height = 0.0;
         frame.show(ui, |ui| {
@@ -607,7 +644,13 @@ impl App {
     }
 
     /// Two cards side by side, kept the same height using what each measured last frame.
-    fn card_pair(&mut self, ui: &mut egui::Ui, id: &str, left: impl FnOnce(&mut Self, &mut egui::Ui), right: impl FnOnce(&mut Self, &mut egui::Ui)) {
+    fn card_pair(
+        &mut self,
+        ui: &mut egui::Ui,
+        id: &str,
+        left: impl FnOnce(&mut Self, &mut egui::Ui),
+        right: impl FnOnce(&mut Self, &mut egui::Ui),
+    ) {
         let key = egui::Id::new(("card_pair", id));
         let height = ui.ctx().data(|d| d.get_temp::<f32>(key)).unwrap_or(0.0);
         let mut tallest = 0.0_f32;
@@ -623,7 +666,13 @@ impl App {
     }
 
     /// A title and optional explanation on the left, with its control on the right.
-    fn setting_row(&mut self, ui: &mut egui::Ui, title: &str, explanation: &str, add: impl FnOnce(&mut Self, &mut egui::Ui)) {
+    fn setting_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        title: &str,
+        explanation: &str,
+        add: impl FnOnce(&mut Self, &mut egui::Ui),
+    ) {
         let palette = self.palette;
         let left = if explanation.is_empty() {
             let font = egui::TextStyle::Body.resolve(ui.style());
@@ -632,22 +681,31 @@ impl App {
             (ui.available_width() * 0.62).floor()
         };
         ui.horizontal_top(|ui| {
-            let text = ui.allocate_ui_with_layout(Vec2::new(left, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
-                ui.set_width(left);
-                ui.spacing_mut().item_spacing.y = 1.0;
-                ui.add_space(4.0);
-                ui.label(title);
-                if !explanation.is_empty() {
-                    hint(ui, explanation, &palette);
-                }
-            });
+            let text =
+                ui.allocate_ui_with_layout(Vec2::new(left, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+                    ui.set_width(left);
+                    ui.spacing_mut().item_spacing.y = 1.0;
+                    ui.add_space(4.0);
+                    ui.label(title);
+                    if !explanation.is_empty() {
+                        hint(ui, explanation, &palette);
+                    }
+                });
             // A set height, because a page that scrolls would otherwise centre this in endless room.
             let room = Vec2::new(ui.available_width(), text.response.rect.height().max(ui.spacing().interact_size.y));
             ui.allocate_ui_with_layout(room, egui::Layout::right_to_left(egui::Align::Center), |ui| add(self, ui));
         });
     }
 
-    fn toggle_row(&mut self, ui: &mut egui::Ui, title: &str, explanation: &str, current: bool, default: bool, set: fn(&mut Settings, bool)) {
+    fn toggle_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        title: &str,
+        explanation: &str,
+        current: bool,
+        default: bool,
+        set: fn(&mut Settings, bool),
+    ) {
         self.setting_row(ui, title, explanation, |app, ui| {
             let accent = app.palette.accent;
             let mut on = current;
@@ -677,7 +735,7 @@ impl App {
         }
         self.palette = Palette::of(&wanted.0);
         self.animations = wanted.1;
-        color_title_bar(self.shared.window.load(Ordering::SeqCst) as isize, &wanted.0);
+        color_title_bar(self.shared.window.load(Ordering::SeqCst), &wanted.0);
         let visuals = visuals_for(&wanted.0);
         let animation_time = if wanted.1 { 0.1 } else { 0.0 };
         ctx.style_mut(|style| {
@@ -731,7 +789,8 @@ impl App {
         if self.apps_checked.is_none_or(|t| t.elapsed() >= PROCESS_CHECK_EVERY) {
             let names = preflight::process_names();
             self.apps = preflight::interfering(names.iter().map(String::as_str));
-            self.otd_elevated = if self.shared.settings().output == Output::OpenTabletDriver { otd::daemon_elevated() } else { None };
+            self.otd_elevated =
+                if self.shared.settings().output == Output::OpenTabletDriver { otd::daemon_elevated() } else { None };
             self.apps_checked = Some(Instant::now());
         }
         if self.shared.connected.load(Ordering::SeqCst) {
@@ -778,7 +837,12 @@ impl App {
         }
         let app_connected = self.shared.app_connected.load(Ordering::SeqCst);
         let missing_for = self.app_missing_since.map(|t| t.elapsed());
-        checks.extend(app_check(connected, app_connected, self.shared.app_floating.load(Ordering::SeqCst), missing_for));
+        checks.extend(app_check(
+            connected,
+            app_connected,
+            self.shared.app_floating.load(Ordering::SeqCst),
+            missing_for,
+        ));
         let freeze = self.shared.last_freeze.lock().unwrap().clone();
         checks.extend(freeze_check(freeze.as_ref().map(|(at, ms, program)| (at.elapsed(), *ms, program.as_str()))));
         if let Some(problem) = self.shared.direct_problem.lock().unwrap().clone() {
@@ -789,10 +853,7 @@ impl App {
         }
         checks.push(apps_check(&self.apps));
         if self.shared.test_mode.load(Ordering::SeqCst) {
-            checks.push(warn(
-                "Precision test is on",
-                "It adds work to every pen report. Turn it off before playing.",
-            ));
+            checks.push(warn("Precision test is on", "It adds work to every pen report. Turn it off before playing."));
         }
         checks
     }
@@ -838,7 +899,11 @@ impl App {
         if output == Output::Direct {
             hint(ui, "Straight to the cursor. The fastest path, with no Windows Ink or other programs. Its own smoothing is on the Pen area tab.", &self.palette);
         } else {
-            hint(ui, "Sends the pen through OpenTabletDriver, so its filters and plugins work. It sets the area itself.", &self.palette);
+            hint(
+                ui,
+                "Sends the pen through OpenTabletDriver, so its filters and plugins work. It sets the area itself.",
+                &self.palette,
+            );
             if let Some(dir) = otd::program_dir(&self.exe_dir) {
                 if ui.button("Open OpenTabletDriver").clicked() {
                     if let Err(e) = otd::open_settings_window(&dir) {
@@ -864,14 +929,17 @@ impl App {
     fn orientation_picker(&mut self, ui: &mut egui::Ui) {
         let current = self.shared.settings().rotation;
         let label = ORIENTATIONS.iter().find(|o| o.0 == current).map_or("", |o| o.1);
-        egui::ComboBox::from_id_salt("orientation").selected_text(label).width(ui.available_width().min(300.0)).show_ui(ui, |ui| {
-            for (rotation, name) in ORIENTATIONS {
-                if ui.selectable_label(current == rotation, name).clicked() {
-                    self.shared.update_settings(|s| s.rotation = rotation);
-                    self.changed();
+        egui::ComboBox::from_id_salt("orientation")
+            .selected_text(label)
+            .width(ui.available_width().min(300.0))
+            .show_ui(ui, |ui| {
+                for (rotation, name) in ORIENTATIONS {
+                    if ui.selectable_label(current == rotation, name).clicked() {
+                        self.shared.update_settings(|s| s.rotation = rotation);
+                        self.changed();
+                    }
                 }
-            }
-        });
+            });
     }
 
     fn set_size(&mut self, width: f64, height: f64) {
@@ -915,10 +983,26 @@ impl App {
 
         let (mut w_changed, mut h_changed) = (false, false);
         self.setting_row(ui, "Width", "", |_, ui| {
-            w_changed = ui.add(egui::DragValue::new(&mut width).range(MIN_AREA_MM..=max_w).speed(0.5).max_decimals(1).suffix(" mm")).changed();
+            w_changed = ui
+                .add(
+                    egui::DragValue::new(&mut width)
+                        .range(MIN_AREA_MM..=max_w)
+                        .speed(0.5)
+                        .max_decimals(1)
+                        .suffix(" mm"),
+                )
+                .changed();
         });
         self.setting_row(ui, "Height", "", |_, ui| {
-            h_changed = ui.add(egui::DragValue::new(&mut height).range(MIN_AREA_MM..=max_h).speed(0.5).max_decimals(1).suffix(" mm")).changed();
+            h_changed = ui
+                .add(
+                    egui::DragValue::new(&mut height)
+                        .range(MIN_AREA_MM..=max_h)
+                        .speed(0.5)
+                        .max_decimals(1)
+                        .suffix(" mm"),
+                )
+                .changed();
         });
         if w_changed || h_changed {
             if lock {
@@ -960,7 +1044,12 @@ impl App {
     fn setup_screen(&mut self, ui: &mut egui::Ui) {
         ui.add_space(8.0);
         let palette = self.palette;
-        page_header(ui, "Welcome to osu!tab", &format!("Question {} of 2. You can change both later.", self.setup_step + 1), &palette);
+        page_header(
+            ui,
+            "Welcome to osu!tab",
+            &format!("Question {} of 2. You can change both later.", self.setup_step + 1),
+            &palette,
+        );
         self.card(ui, |app, ui| {
             if app.setup_step == 0 {
                 section_title(ui, "How will the tablet sit while you play?");
@@ -982,7 +1071,9 @@ impl App {
                 self.setup_step = 0;
             }
             let label = if self.setup_step == 0 { "Next" } else { "Start" };
-            let button = egui::Button::new(strong(label).color(palette.on_accent)).fill(palette.accent).min_size(Vec2::new(110.0, 32.0));
+            let button = egui::Button::new(strong(label).color(palette.on_accent))
+                .fill(palette.accent)
+                .min_size(Vec2::new(110.0, 32.0));
             if ui.add(button).clicked() {
                 if self.setup_step == 0 {
                     self.setup_step = 1;
@@ -1004,9 +1095,24 @@ impl App {
         if lit > 0.0 {
             painter.rect_filled(rect, 10.0, palette.panel.gamma_multiply(lit));
         }
-        nav_icon(painter, tab, Pos2::new(rect.left() + 21.0, rect.center().y), if chosen { palette.accent } else { palette.muted });
-        let (family, color) = if chosen { (FontFamily::Name(SEMIBOLD.into()), palette.text) } else { (FontFamily::Proportional, palette.muted) };
-        painter.text(Pos2::new(rect.left() + 40.0, rect.center().y), egui::Align2::LEFT_CENTER, name, egui::FontId::new(14.0, family), color);
+        nav_icon(
+            painter,
+            tab,
+            Pos2::new(rect.left() + 21.0, rect.center().y),
+            if chosen { palette.accent } else { palette.muted },
+        );
+        let (family, color) = if chosen {
+            (FontFamily::Name(SEMIBOLD.into()), palette.text)
+        } else {
+            (FontFamily::Proportional, palette.muted)
+        };
+        painter.text(
+            Pos2::new(rect.left() + 40.0, rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            name,
+            egui::FontId::new(14.0, family),
+            color,
+        );
         if response.clicked() {
             self.select_tab(tab);
         }
@@ -1024,7 +1130,8 @@ impl App {
     /// Sits at the foot of the sidebar, so it's on every page.
     fn status_block(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette;
-        let quit = egui::Button::new(RichText::new("Quit").color(palette.muted)).min_size(Vec2::new(ui.available_width(), 30.0));
+        let quit = egui::Button::new(RichText::new("Quit").color(palette.muted))
+            .min_size(Vec2::new(ui.available_width(), 30.0));
         if ui.add(quit).on_hover_text("Stops osu!tab and gives the pen back to Android").clicked() {
             self.shared.stats.stop.store(true, Ordering::SeqCst);
         }
@@ -1062,11 +1169,14 @@ impl App {
         let (level, headline) = summary(&checks);
         let color = if level == CheckLevel::Good { palette.text } else { palette.level(level) };
         ui.label(RichText::new(headline).heading().color(color));
-        ui.label(RichText::new(match level {
-            CheckLevel::Good => "Everything's in place.",
-            CheckLevel::Warn => "You can play, but these could get in the way.",
-            CheckLevel::Bad => "Fix the items below to start.",
-        }).color(palette.muted));
+        ui.label(
+            RichText::new(match level {
+                CheckLevel::Good => "Everything's in place.",
+                CheckLevel::Warn => "You can play, but these could get in the way.",
+                CheckLevel::Bad => "Fix the items below to start.",
+            })
+            .color(palette.muted),
+        );
         ui.add_space(12.0);
 
         let (passed, problems): (Vec<&Check>, Vec<&Check>) = checks.iter().partition(|c| c.level == CheckLevel::Good);
@@ -1082,13 +1192,20 @@ impl App {
         }
         if !passed.is_empty() {
             self.card(ui, |app, ui| {
-                let label = if passed.len() == 1 { "1 check passed".to_string() } else { format!("{} checks passed", passed.len()) };
+                let label = if passed.len() == 1 {
+                    "1 check passed".to_string()
+                } else {
+                    format!("{} checks passed", passed.len())
+                };
                 ui.horizontal(|ui| {
                     status_dot(ui, "passed", palette.good, app.seconds(STATUS_FADE));
                     ui.label(label);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         let text = if app.show_passed { "Hide" } else { "Show" };
-                        if ui.add(egui::Button::new(RichText::new(text).color(palette.muted).small()).frame(false)).clicked() {
+                        if ui
+                            .add(egui::Button::new(RichText::new(text).color(palette.muted).small()).frame(false))
+                            .clicked()
+                        {
                             app.show_passed = !app.show_passed;
                         }
                     });
@@ -1106,23 +1223,28 @@ impl App {
         }
 
         let direct = self.shared.settings().output == Output::Direct;
-        self.card_pair(ui, "play", |app, ui| {
-            section_title(ui, "Pen area");
-            if direct || app.otd_area.is_some() {
-                ui.vertical_centered(|ui| app.preview(ui, 170.0));
-            }
-            if !direct {
-                hint(ui, "Set in OpenTabletDriver.", &palette);
-            }
-        }, |app, ui| {
-            section_title(ui, "Output");
-            app.output_picker(ui);
-            if direct {
-                ui.add_space(6.0);
-                app.preset_picker(ui);
-                hint(ui, &app.sensitivity_text(), &palette);
-            }
-        });
+        self.card_pair(
+            ui,
+            "play",
+            |app, ui| {
+                section_title(ui, "Pen area");
+                if direct || app.otd_area.is_some() {
+                    ui.vertical_centered(|ui| app.preview(ui, 170.0));
+                }
+                if !direct {
+                    hint(ui, "Set in OpenTabletDriver.", &palette);
+                }
+            },
+            |app, ui| {
+                section_title(ui, "Output");
+                app.output_picker(ui);
+                if direct {
+                    ui.add_space(6.0);
+                    app.preset_picker(ui);
+                    hint(ui, &app.sensitivity_text(), &palette);
+                }
+            },
+        );
         let closing = if self.shared.settings().close_to_tray {
             "Closing this window keeps osu!tab running in the tray. Quit gives the pen back to Android and closes the tablet app."
         } else {
@@ -1178,26 +1300,38 @@ impl App {
             let live = app.shared.live_config();
             ui.horizontal(|ui| {
                 ui.label(strong(format!("{:.1} x {:.1} mm", live.area.width_mm, live.area.height_mm)));
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| hint(ui, &app.sensitivity_text(), &palette));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    hint(ui, &app.sensitivity_text(), &palette)
+                });
             });
             ui.add_space(4.0);
             ui.vertical_centered(|ui| app.preview(ui, 210.0));
         });
-        self.card_pair(ui, "size", |app, ui| {
-            section_title(ui, "Size");
-            app.quick_sizes(ui);
-            app.size_fields(ui);
-        }, |app, ui| {
-            section_title(ui, "Position");
-            app.position_fields(ui);
-        });
-        self.card_pair(ui, "presets", |app, ui| {
-            section_title(ui, "Presets");
-            app.preset_row(ui);
-        }, |app, ui| {
-            section_title(ui, "Tablet and pen");
-            app.pen_options(ui);
-        });
+        self.card_pair(
+            ui,
+            "size",
+            |app, ui| {
+                section_title(ui, "Size");
+                app.quick_sizes(ui);
+                app.size_fields(ui);
+            },
+            |app, ui| {
+                section_title(ui, "Position");
+                app.position_fields(ui);
+            },
+        );
+        self.card_pair(
+            ui,
+            "presets",
+            |app, ui| {
+                section_title(ui, "Presets");
+                app.preset_row(ui);
+            },
+            |app, ui| {
+                section_title(ui, "Tablet and pen");
+                app.pen_options(ui);
+            },
+        );
         self.card(ui, |app, ui| app.filter_options(ui));
     }
 
@@ -1210,13 +1344,37 @@ impl App {
         let mut rotation = self.shared.settings().area().rotation_deg;
         let mut changed = false;
         self.setting_row(ui, "X offset", "", |_, ui| {
-            changed |= ui.add(egui::DragValue::new(&mut offset_x).range(-max_w / 2.0..=max_w / 2.0).speed(0.5).max_decimals(1).suffix(" mm")).changed();
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut offset_x)
+                        .range(-max_w / 2.0..=max_w / 2.0)
+                        .speed(0.5)
+                        .max_decimals(1)
+                        .suffix(" mm"),
+                )
+                .changed();
         });
         self.setting_row(ui, "Y offset", "", |_, ui| {
-            changed |= ui.add(egui::DragValue::new(&mut offset_y).range(-max_h / 2.0..=max_h / 2.0).speed(0.5).max_decimals(1).suffix(" mm")).changed();
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut offset_y)
+                        .range(-max_h / 2.0..=max_h / 2.0)
+                        .speed(0.5)
+                        .max_decimals(1)
+                        .suffix(" mm"),
+                )
+                .changed();
         });
         self.setting_row(ui, "Rotation", "", |_, ui| {
-            changed |= ui.add(egui::DragValue::new(&mut rotation).range(-180.0..=180.0).speed(0.25).max_decimals(1).suffix(" deg")).changed();
+            changed |= ui
+                .add(
+                    egui::DragValue::new(&mut rotation)
+                        .range(-180.0..=180.0)
+                        .speed(0.25)
+                        .max_decimals(1)
+                        .suffix(" deg"),
+                )
+                .changed();
         });
         if ui.button("Center").clicked() {
             (offset_x, offset_y) = (0.0, 0.0);
@@ -1244,7 +1402,14 @@ impl App {
         self.orientation_picker(ui);
         let settings = self.shared.settings();
         let defaults = Settings::default();
-        self.toggle_row(ui, "Show the area on the tablet", "", settings.show_outline, defaults.show_outline, |s, on| s.show_outline = on);
+        self.toggle_row(
+            ui,
+            "Show the area on the tablet",
+            "",
+            settings.show_outline,
+            defaults.show_outline,
+            |s, on| s.show_outline = on,
+        );
         self.toggle_row(ui, "Pen tip clicks", "", settings.tip_click, defaults.tip_click, |s, on| s.tip_click = on);
         self.setting_row(ui, "Side button key", "", |app, ui| {
             let palette = app.palette;
@@ -1290,7 +1455,12 @@ impl App {
         let settings = self.shared.settings();
         self.preset_picker(ui);
         ui.horizontal_wrapped(|ui| {
-            ui.add(egui::TextEdit::singleline(&mut self.preset_name).desired_width(120.0).hint_text("New name").margin(Vec2::new(8.0, 6.0)));
+            ui.add(
+                egui::TextEdit::singleline(&mut self.preset_name)
+                    .desired_width(120.0)
+                    .hint_text("New name")
+                    .margin(Vec2::new(8.0, 6.0)),
+            );
             if ui.button("Save as").clicked() {
                 let mut outcome = Ok(());
                 let name = self.preset_name.clone();
@@ -1324,7 +1494,8 @@ impl App {
         }
         let (tablet_w, tablet_h) = (live.area.tablet_w as f32, live.area.tablet_h as f32);
         let scale = (ui.available_width() / tablet_w).min(max_height / tablet_h);
-        let (response, painter) = ui.allocate_painter(Vec2::new(tablet_w * scale, tablet_h * scale), egui::Sense::hover());
+        let (response, painter) =
+            ui.allocate_painter(Vec2::new(tablet_w * scale, tablet_h * scale), egui::Sense::hover());
         let origin = response.rect.min;
         let at = |x: f32, y: f32| origin + Vec2::new(x * scale, y * scale);
 
@@ -1346,7 +1517,11 @@ impl App {
             .collect();
 
         painter.rect_filled(response.rect, 8.0, self.palette.outside);
-        painter.add(egui::Shape::convex_polygon(corners, self.palette.area, Stroke::new(self.palette.thickness, self.palette.outline)));
+        painter.add(egui::Shape::convex_polygon(
+            corners,
+            self.palette.area,
+            Stroke::new(self.palette.thickness, self.palette.outline),
+        ));
 
         let (u, v, flags) = self.shared.pen();
         if flags & osutab_core::FLAG_IN_RANGE != 0 {
@@ -1361,7 +1536,11 @@ impl App {
         let palette = self.palette;
         let (f, d) = (self.shared.settings().filters, FilterSettings::default());
         section_title(ui, "Filters");
-        hint(ui, "Smoothing for a shaky hand, without OpenTabletDriver. Each one adds a little delay, so both start off.", &palette);
+        hint(
+            ui,
+            "Smoothing for a shaky hand, without OpenTabletDriver. Each one adds a little delay, so both start off.",
+            &palette,
+        );
         self.toggle_row(ui, "Radial follow", "Holds the cursor still through small wobbles, and follows bigger moves quickly. The same settings as OpenTabletDriver's Radial Follow Smoothing.", f.radial.on, d.radial.on, |s, on| s.filters.radial.on = on);
         if f.radial.on {
             let (r, rd) = (f.radial, d.radial);
@@ -1382,7 +1561,14 @@ impl App {
         self.toggle_row(ui, "Time smoothing", "Averages the pen's position over a short time, for steadier lines. Slow moves trail the pen by about the smoothing time.", f.time.on, d.time.on, |s, on| s.filters.time.on = on);
         if f.time.on {
             ui.indent("time_smoothing", |ui| {
-                self.filter_number(ui, "Smoothing time", "The cursor catches up about two-thirds of a move in this time.", (f.time.ms, d.time.ms), |v| egui::DragValue::new(v).range(filters::TIME_MS).speed(0.1).max_decimals(1).suffix(" ms"), |s, v| s.filters.time.ms = v);
+                self.filter_number(
+                    ui,
+                    "Smoothing time",
+                    "The cursor catches up about two-thirds of a move in this time.",
+                    (f.time.ms, d.time.ms),
+                    |v| egui::DragValue::new(v).range(filters::TIME_MS).speed(0.1).max_decimals(1).suffix(" ms"),
+                    |s, v| s.filters.time.ms = v,
+                );
             });
         }
         if f.radial.on && f.time.on {
@@ -1392,7 +1578,15 @@ impl App {
 
     /// One filter setting: a number to drag or type, like the area's, and a reset when it's off
     /// its default.
-    fn filter_number(&mut self, ui: &mut egui::Ui, title: &str, explanation: &str, (current, default): (f64, f64), field: fn(&mut f64) -> egui::DragValue<'_>, set: fn(&mut Settings, f64)) {
+    fn filter_number(
+        &mut self,
+        ui: &mut egui::Ui,
+        title: &str,
+        explanation: &str,
+        (current, default): (f64, f64),
+        field: fn(&mut f64) -> egui::DragValue<'_>,
+        set: fn(&mut Settings, f64),
+    ) {
         self.setting_row(ui, title, explanation, |app, ui| {
             let palette = app.palette;
             let mut value = current;
@@ -1421,7 +1615,11 @@ impl App {
             ui.scope(|ui| {
                 ui.spacing_mut().item_spacing.x = CARD_GAP;
                 ui.columns(3, |columns| {
-                    let stats = [("Median", total.p50, median_color), ("99th percentile", total.p99, palette.text), ("Worst", total.max, palette.text)];
+                    let stats = [
+                        ("Median", total.p50, median_color),
+                        ("99th percentile", total.p99, palette.text),
+                        ("Worst", total.max, palette.text),
+                    ];
                     for (column, (name, value, color)) in columns.iter_mut().zip(stats) {
                         self.stat_tile(column, name, &format!("{value:.2}"), "ms", color);
                     }
@@ -1491,8 +1689,24 @@ impl App {
             });
         };
         row(ui, "Android's input system", "Bypassed: read from the kernel", good);
-        row(ui, "Smoothing, prediction, acceleration", if direct { "None" } else { "Whatever OpenTabletDriver has on" }, if direct { good } else { warning });
-        row(ui, "Windows Ink", if direct { "Not used" } else if self.otd_windows_ink { "In use" } else { "Not used" }, if direct || !self.otd_windows_ink { good } else { warning });
+        row(
+            ui,
+            "Smoothing, prediction, acceleration",
+            if direct { "None" } else { "Whatever OpenTabletDriver has on" },
+            if direct { good } else { warning },
+        );
+        row(
+            ui,
+            "Windows Ink",
+            if direct {
+                "Not used"
+            } else if self.otd_windows_ink {
+                "In use"
+            } else {
+                "Not used"
+            },
+            if direct || !self.otd_windows_ink { good } else { warning },
+        );
         if direct_usb {
             row(ui, "adbd and USB", "In the path: most of the added time", warning);
             row(ui, "adb.exe", "Bypassed: direct USB", good);
@@ -1507,7 +1721,12 @@ impl App {
 
     fn precision_tab(&mut self, ui: &mut egui::Ui) {
         let palette = self.palette;
-        page_header(ui, "Precision test", "Compares where the pen says the cursor should be with where Windows put it.", &palette);
+        page_header(
+            ui,
+            "Precision test",
+            "Compares where the pen says the cursor should be with where Windows put it.",
+            &palette,
+        );
         let mut on = self.shared.test_mode.load(Ordering::SeqCst);
         self.card(ui, |app, ui| {
             app.setting_row(ui, "Compare the pen with the cursor", "It adds a little work to every pen report, so it turns itself off after 2 minutes, and when this window closes.", |app, ui| {
@@ -1542,8 +1761,20 @@ impl App {
             ui.spacing_mut().item_spacing.x = CARD_GAP;
             ui.columns(3, |columns| {
                 self.stat_tile(&mut columns[0], "Worst error", &format!("{:.2}", p.worst_px), "px", color);
-                self.stat_tile(&mut columns[1], "Samples over 1 px", &p.over_1px.to_string(), &format!("of {}", p.samples), palette.text);
-                self.stat_tile(&mut columns[2], "Worst of the big jumps", &format!("{:.2}", p.worst_jump_px), &format!("px, {} jumps", p.jumps), palette.text);
+                self.stat_tile(
+                    &mut columns[1],
+                    "Samples over 1 px",
+                    &p.over_1px.to_string(),
+                    &format!("of {}", p.samples),
+                    palette.text,
+                );
+                self.stat_tile(
+                    &mut columns[2],
+                    "Worst of the big jumps",
+                    &format!("{:.2}", p.worst_jump_px),
+                    &format!("px, {} jumps", p.jumps),
+                    palette.text,
+                );
             });
         });
         ui.add_space(CARD_GAP - ui.spacing().item_spacing.y);
@@ -1557,11 +1788,18 @@ impl App {
         );
     }
 
-    fn color_row(&mut self, ui: &mut egui::Ui, name: &str, field: fn(&mut ThemeOverrides) -> &mut Option<Rgb>, current: Rgb) {
+    fn color_row(
+        &mut self,
+        ui: &mut egui::Ui,
+        name: &str,
+        field: fn(&mut ThemeOverrides) -> &mut Option<Rgb>,
+        current: Rgb,
+    ) {
         self.setting_row(ui, name, "", |app, ui| {
             let mut color = [current.0, current.1, current.2];
             if ui.color_edit_button_srgb(&mut color).changed() {
-                app.shared.update_settings(|s| *field(&mut s.theme_overrides) = Some(Rgb(color[0], color[1], color[2])));
+                app.shared
+                    .update_settings(|s| *field(&mut s.theme_overrides) = Some(Rgb(color[0], color[1], color[2])));
                 app.changed();
             }
             let mut overrides = app.shared.settings().theme_overrides;
@@ -1631,7 +1869,12 @@ impl App {
             });
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
-                ui.add(egui::TextEdit::singleline(&mut app.theme_name).desired_width(140.0).hint_text("My theme").margin(Vec2::new(8.0, 6.0)));
+                ui.add(
+                    egui::TextEdit::singleline(&mut app.theme_name)
+                        .desired_width(140.0)
+                        .hint_text("My theme")
+                        .margin(Vec2::new(8.0, 6.0)),
+                );
                 if ui.button("Save as my theme").clicked() {
                     let mut outcome = Ok(());
                     let name = app.theme_name.clone();
@@ -1654,45 +1897,65 @@ impl App {
             });
         });
 
-        self.card_pair(ui, "appearance", |app, ui| {
-            section_title(ui, "Colors");
-            app.color_row(ui, "Background", |o| &mut o.background, active.background);
-            app.color_row(ui, "Panels", |o| &mut o.panel, active.panel);
-            app.color_row(ui, "Text", |o| &mut o.text, active.text);
-            app.color_row(ui, "Quiet text", |o| &mut o.muted, active.muted);
-            app.color_row(ui, "Accent", |o| &mut o.accent, active.accent);
-        }, |app, ui| {
-            section_title(ui, "Pen area on the tablet");
-            app.color_row(ui, "Outline color", |o| &mut o.outline, active.outline);
-            app.setting_row(ui, "Outline thickness", "", |app, ui| {
-                let mut thickness = active.outline_thickness;
-                if row_slider(ui, egui::Slider::new(&mut thickness, MIN_THICKNESS..=MAX_THICKNESS).step_by(0.5), &palette).changed() {
-                    app.shared.update_settings(|s| s.theme_overrides.outline_thickness = Some(thickness));
-                    app.changed();
-                }
-                if reset_button(ui, settings.theme_overrides.outline_thickness.is_some(), &palette) {
-                    app.shared.update_settings(|s| s.theme_overrides.outline_thickness = None);
-                    app.changed();
-                }
-            });
-            app.setting_row(ui, "Darkness outside it", "", |app, ui| {
-                let mut dim = active.outside_dim;
-                if row_slider(ui, egui::Slider::new(&mut dim, 0..=100).suffix("%"), &palette).changed() {
-                    app.shared.update_settings(|s| s.theme_overrides.outside_dim = Some(dim));
-                    app.changed();
-                }
-                if reset_button(ui, settings.theme_overrides.outside_dim.is_some(), &palette) {
-                    app.shared.update_settings(|s| s.theme_overrides.outside_dim = None);
-                    app.changed();
-                }
-            });
-            ui.add_space(4.0);
-            ui.vertical_centered(|ui| app.preview(ui, 100.0));
-        });
+        self.card_pair(
+            ui,
+            "appearance",
+            |app, ui| {
+                section_title(ui, "Colors");
+                app.color_row(ui, "Background", |o| &mut o.background, active.background);
+                app.color_row(ui, "Panels", |o| &mut o.panel, active.panel);
+                app.color_row(ui, "Text", |o| &mut o.text, active.text);
+                app.color_row(ui, "Quiet text", |o| &mut o.muted, active.muted);
+                app.color_row(ui, "Accent", |o| &mut o.accent, active.accent);
+            },
+            |app, ui| {
+                section_title(ui, "Pen area on the tablet");
+                app.color_row(ui, "Outline color", |o| &mut o.outline, active.outline);
+                app.setting_row(ui, "Outline thickness", "", |app, ui| {
+                    let mut thickness = active.outline_thickness;
+                    if row_slider(
+                        ui,
+                        egui::Slider::new(&mut thickness, MIN_THICKNESS..=MAX_THICKNESS).step_by(0.5),
+                        &palette,
+                    )
+                    .changed()
+                    {
+                        app.shared.update_settings(|s| s.theme_overrides.outline_thickness = Some(thickness));
+                        app.changed();
+                    }
+                    if reset_button(ui, settings.theme_overrides.outline_thickness.is_some(), &palette) {
+                        app.shared.update_settings(|s| s.theme_overrides.outline_thickness = None);
+                        app.changed();
+                    }
+                });
+                app.setting_row(ui, "Darkness outside it", "", |app, ui| {
+                    let mut dim = active.outside_dim;
+                    if row_slider(ui, egui::Slider::new(&mut dim, 0..=100).suffix("%"), &palette).changed() {
+                        app.shared.update_settings(|s| s.theme_overrides.outside_dim = Some(dim));
+                        app.changed();
+                    }
+                    if reset_button(ui, settings.theme_overrides.outside_dim.is_some(), &palette) {
+                        app.shared.update_settings(|s| s.theme_overrides.outside_dim = None);
+                        app.changed();
+                    }
+                });
+                ui.add_space(4.0);
+                ui.vertical_centered(|ui| app.preview(ui, 100.0));
+            },
+        );
 
         self.card(ui, |app, ui| {
-            app.toggle_row(ui, "Animations", "On both the PC and the tablet. They never touch the pen's path.", settings.animations, true, |s, on| s.animations = on);
-            let defaults = settings.theme == theme::DEFAULT_THEME && settings.theme_overrides == ThemeOverrides::default() && settings.animations;
+            app.toggle_row(
+                ui,
+                "Animations",
+                "On both the PC and the tablet. They never touch the pen's path.",
+                settings.animations,
+                true,
+                |s, on| s.animations = on,
+            );
+            let defaults = settings.theme == theme::DEFAULT_THEME
+                && settings.theme_overrides == ThemeOverrides::default()
+                && settings.animations;
             if !defaults {
                 divider(ui);
                 if ui.button("Reset appearance").clicked() {
@@ -1751,9 +2014,23 @@ impl App {
 
         self.card(ui, |app, ui| {
             section_title(ui, "This program");
-            app.toggle_row(ui, "Keep running in the tray when closed", "", s.close_to_tray, d.close_to_tray, |st, on| st.close_to_tray = on);
+            app.toggle_row(
+                ui,
+                "Keep running in the tray when closed",
+                "",
+                s.close_to_tray,
+                d.close_to_tray,
+                |st, on| st.close_to_tray = on,
+            );
             divider(ui);
-            app.toggle_row(ui, "Start in the tray", "Applies the next time osu!tab starts.", s.start_minimized, d.start_minimized, |st, on| st.start_minimized = on);
+            app.toggle_row(
+                ui,
+                "Start in the tray",
+                "Applies the next time osu!tab starts.",
+                s.start_minimized,
+                d.start_minimized,
+                |st, on| st.start_minimized = on,
+            );
         });
 
         self.card(ui, |app, ui| {
@@ -1852,7 +2129,8 @@ impl eframe::App for App {
             .frame(surface.inner_margin(egui::Margin::symmetric(14, 16)))
             .show(ctx, |ui| self.sidebar(ui));
         let fade_time = self.seconds(TAB_FADE);
-        let opacity = if fade_time > 0.0 { (self.tab_changed.elapsed().as_secs_f32() / fade_time).min(1.0) } else { 1.0 };
+        let opacity =
+            if fade_time > 0.0 { (self.tab_changed.elapsed().as_secs_f32() / fade_time).min(1.0) } else { 1.0 };
         if opacity < 1.0 {
             ctx.request_repaint();
         }
@@ -1886,16 +2164,19 @@ fn key_picker(ui: &mut egui::Ui, key: &str, listening: Option<&str>, palette: &P
         if ui.button("Cancel").clicked() {
             pick = Some(KeyPick::Cancel);
         }
-        let prompt = if held.is_empty() { "Press a key, or up to 3 together".to_string() } else { format!("{held} + \u{2026}") };
+        let prompt =
+            if held.is_empty() { "Press a key, or up to 3 together".to_string() } else { format!("{held} + \u{2026}") };
         ui.colored_label(palette.accent, prompt);
     } else {
-        let response = ui
-            .button(crate::keys::label(key))
-            .on_hover_text("Click, then press a key. For a combination such as Shift + 2, hold the keys down, then let go.");
+        let response = ui.button(crate::keys::label(key)).on_hover_text(
+            "Click, then press a key. For a combination such as Shift + 2, hold the keys down, then let go.",
+        );
         if response.clicked() {
             pick = Some(KeyPick::Listen);
         }
-        if !key.is_empty() && ui.add(egui::Button::new(RichText::new("Clear").color(palette.muted).small()).frame(false)).clicked() {
+        if !key.is_empty()
+            && ui.add(egui::Button::new(RichText::new("Clear").color(palette.muted).small()).frame(false)).clicked()
+        {
             pick = Some(KeyPick::Clear);
         }
     }
@@ -2085,7 +2366,10 @@ mod tests {
     fn a_drop_that_comes_back_quickly_does_not_show() {
         assert!(shown_connected(true, None));
         assert!(!shown_connected(false, None), "never connected");
-        assert!(shown_connected(false, Some(Duration::from_millis(700))), "pinning's USB reset is back in under a second");
+        assert!(
+            shown_connected(false, Some(Duration::from_millis(700))),
+            "pinning's USB reset is back in under a second"
+        );
         assert!(!shown_connected(false, Some(RECONNECT_GRACE)), "a real disconnect shows after the grace");
     }
 
@@ -2094,8 +2378,15 @@ mod tests {
         let check = freeze_check(Some((Duration::from_secs(30), 1600.0, "osu!.exe"))).unwrap();
         assert!(check.title.contains("1.6 s"), "{}", check.title);
         assert!(check.detail.unwrap().contains("osu!.exe"));
-        assert!(freeze_check(Some((Duration::from_secs(300), 900.0, "x.exe"))).unwrap().detail.unwrap().starts_with("5 minutes ago"));
-        assert!(freeze_check(Some((FREEZE_SHOWN_FOR + Duration::from_secs(1), 1600.0, "x.exe"))).is_none(), "an old one is forgotten");
+        assert!(freeze_check(Some((Duration::from_secs(300), 900.0, "x.exe")))
+            .unwrap()
+            .detail
+            .unwrap()
+            .starts_with("5 minutes ago"));
+        assert!(
+            freeze_check(Some((FREEZE_SHOWN_FOR + Duration::from_secs(1), 1600.0, "x.exe"))).is_none(),
+            "an old one is forgotten"
+        );
         assert!(freeze_check(Some((Duration::from_secs(1), 250.0, "x.exe"))).is_none(), "too short to notice");
         assert!(freeze_check(None).is_none());
     }
@@ -2146,7 +2437,12 @@ mod tests {
         };
         let pos = position(frame(Vec::new()));
         frame(vec![egui::Event::PointerMoved(pos)]);
-        let press = |pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        let press = |pressed| egui::Event::PointerButton {
+            pos,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: Default::default(),
+        };
         frame(vec![press(true)]);
         frame(vec![press(false)]);
     }
@@ -2169,7 +2465,9 @@ mod tests {
         let rtl = egui::Layout::right_to_left(egui::Align::Min);
         let right_end = |rect: egui::Rect| Pos2::new(rect.right() - 6.0, rect.center().y);
         let left_end = |rect: egui::Rect| Pos2::new(rect.left() + 6.0, rect.center().y);
-        let cases: [(&str, Option<&str>, &dyn Fn(egui::Rect) -> Pos2, KeyPick); 6] = [
+        // The button's key, what the picker has heard so far, where to click, and what should happen.
+        type Case<'a> = (&'a str, Option<&'a str>, &'a dyn Fn(egui::Rect) -> Pos2, KeyPick);
+        let cases: [Case; 6] = [
             ("", None, &right_end, KeyPick::Listen),
             ("esc", None, &right_end, KeyPick::Listen),
             ("esc", None, &left_end, KeyPick::Clear),
@@ -2254,7 +2552,11 @@ mod tests {
         let _ = ctx.run(input, |ctx| {
             egui::CentralPanel::default().show(ctx, |ui| {
                 page_scroll(ui, 700.0, |ui| {
-                    height = ui.vertical(|ui| stat_value(ui, "0.55", "ms", Color32::WHITE, Color32::GRAY)).response.rect.height();
+                    height = ui
+                        .vertical(|ui| stat_value(ui, "0.55", "ms", Color32::WHITE, Color32::GRAY))
+                        .response
+                        .rect
+                        .height();
                 });
             });
         });

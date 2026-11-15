@@ -68,7 +68,8 @@ mod tests {
 
     #[test]
     fn reads_display_settings_from_a_real_ini() {
-        let ini = "ConfineMouseMode = Fullscreen\nFrameSync = Unlimited\nWindowMode = Fullscreen\nCursorSensitivity = 1.0\n";
+        let ini =
+            "ConfineMouseMode = Fullscreen\nFrameSync = Unlimited\nWindowMode = Fullscreen\nCursorSensitivity = 1.0\n";
         let d = parse_display(ini);
         assert_eq!(d.frame_sync.as_deref(), Some("Unlimited"));
         assert_eq!(d.window_mode.as_deref(), Some("Fullscreen"));

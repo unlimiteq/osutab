@@ -136,7 +136,8 @@ pub fn code_for_name(name: &str) -> Option<u16> {
         return Some(*code);
     }
     // The spelling used for a key with no name of its own, such as `Scan E06C`.
-    let code = |hex: &str, base: u16| u8::from_str_radix(hex, 16).ok().filter(|&low| low != 0).map(|low| base | low as u16);
+    let code =
+        |hex: &str, base: u16| u8::from_str_radix(hex, 16).ok().filter(|&low| low != 0).map(|low| base | low as u16);
     if let Some(hex) = wanted.strip_prefix("scane0") {
         code(hex, EXTENDED)
     } else if let Some(hex) = wanted.strip_prefix("scan") {
@@ -250,7 +251,8 @@ pub fn label(name: &str) -> String {
 }
 
 /// Both of each Ctrl, Shift, Alt and Win, which come first in a combination whenever they were pressed.
-const MODIFIERS: [u16; 8] = [0x1D, 0x2A, 0x36, 0x38, EXTENDED | 0x1D, EXTENDED | 0x38, EXTENDED | 0x5B, EXTENDED | 0x5C];
+const MODIFIERS: [u16; 8] =
+    [0x1D, 0x2A, 0x36, 0x38, EXTENDED | 0x1D, EXTENDED | 0x38, EXTENDED | 0x5B, EXTENDED | 0x5C];
 
 /// The virtual key, scan code and flags that SendInput needs for a key.
 pub fn key_fields(code: u16, up: bool) -> (u16, u16, u32) {
@@ -492,7 +494,9 @@ mod tests {
 
     #[test]
     fn messages_say_whether_a_key_went_down_repeated_or_came_up() {
-        let details = |scan: isize, extended: bool, repeat: bool| (scan << 16) | if extended { 1 << 24 } else { 0 } | if repeat { 1 << 30 } else { 0 };
+        let details = |scan: isize, extended: bool, repeat: bool| {
+            (scan << 16) | if extended { 1 << 24 } else { 0 } | if repeat { 1 << 30 } else { 0 }
+        };
         assert_eq!(key_event(WM_KEYDOWN, details(0x01, false, false)), Some((KeyEvent::Press, 0x01, false)));
         assert_eq!(key_event(WM_SYSKEYDOWN, details(0x44, false, false)), Some((KeyEvent::Press, 0x44, false)));
         assert_eq!(key_event(WM_KEYDOWN, details(0x48, true, false)), Some((KeyEvent::Press, 0x48, true)));
@@ -512,7 +516,14 @@ mod tests {
             (false, true) => WM_SYSKEYUP,
         };
         let details = (scan << 16) | if extended { 1 << 24 } else { 0 } | if down { 0 } else { (1 << 30) | (1 << 31) };
-        MSG { hwnd: std::ptr::null_mut(), message, wParam: vk as usize, lParam: details, time: 0, pt: unsafe { std::mem::zeroed() } }
+        MSG {
+            hwnd: std::ptr::null_mut(),
+            message,
+            wParam: vk as usize,
+            lParam: details,
+            time: 0,
+            pt: unsafe { std::mem::zeroed() },
+        }
     }
 
     fn send(vk: u16, scan: isize, extended: bool, down: bool) -> bool {
@@ -629,7 +640,11 @@ mod tests {
 
     #[test]
     fn a_combination_fits_in_one_number() {
-        for combo in [Combo::default(), Combo::new(&[0x2C]).unwrap(), Combo::new(&[0x2A, EXTENDED | 0x38, VIRTUAL | VK_PAUSE]).unwrap()] {
+        for combo in [
+            Combo::default(),
+            Combo::new(&[0x2C]).unwrap(),
+            Combo::new(&[0x2A, EXTENDED | 0x38, VIRTUAL | VK_PAUSE]).unwrap(),
+        ] {
             assert_eq!(Combo::from_bits(combo.to_bits()), combo);
         }
         assert!(Combo::default().is_empty());

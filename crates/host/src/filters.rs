@@ -52,7 +52,14 @@ pub struct RadialFollow {
 impl Default for RadialFollow {
     /// The plugin's defaults for tablet millimetres.
     fn default() -> Self {
-        RadialFollow { on: false, outer_radius_mm: 1.0, inner_radius_mm: 0.0, smoothing: 0.95, soft_knee: 1.0, leak: 0.0 }
+        RadialFollow {
+            on: false,
+            outer_radius_mm: 1.0,
+            inner_radius_mm: 0.0,
+            smoothing: 0.95,
+            soft_knee: 1.0,
+            leak: 0.0,
+        }
     }
 }
 
@@ -163,7 +170,13 @@ impl Filters {
     }
 
     /// One report, with the pen's position in mm on the tablet.
-    pub fn filter(&mut self, settings: &FilterSettings, in_range: bool, timestamp_ns: u64, pen: (f64, f64)) -> (f64, f64) {
+    pub fn filter(
+        &mut self,
+        settings: &FilterSettings,
+        in_range: bool,
+        timestamp_ns: u64,
+        pen: (f64, f64),
+    ) -> (f64, f64) {
         if !in_range {
             self.reset();
             return pen;
@@ -231,7 +244,15 @@ mod tests {
     const STEP_NS: u64 = 2_080_000;
 
     fn radial(outer: f64, inner: f64) -> FilterSettings {
-        FilterSettings { radial: RadialFollow { on: true, outer_radius_mm: outer, inner_radius_mm: inner, ..RadialFollow::default() }, ..FilterSettings::default() }
+        FilterSettings {
+            radial: RadialFollow {
+                on: true,
+                outer_radius_mm: outer,
+                inner_radius_mm: inner,
+                ..RadialFollow::default()
+            },
+            ..FilterSettings::default()
+        }
     }
 
     fn timed(ms: f64) -> FilterSettings {
@@ -301,7 +322,10 @@ mod tests {
     /// A fast jump across most of a small pen area: 120 mm at about 1.9 m/s, then still.
     fn fast_move() -> (Vec<(f64, f64)>, usize) {
         let moving = 30;
-        let pen: Vec<_> = (0..=moving).map(|i| (60.0 + 4.0 * i as f64, 100.0)).chain(std::iter::repeat((180.0, 100.0)).take(100)).collect();
+        let pen: Vec<_> = (0..=moving)
+            .map(|i| (60.0 + 4.0 * i as f64, 100.0))
+            .chain(std::iter::repeat_n((180.0, 100.0), 100))
+            .collect();
         (pen, moving)
     }
 
@@ -350,8 +374,7 @@ mod tests {
 
     #[test]
     fn lifting_the_pen_clears_the_state_on_the_input_thread_too() {
-        let mut settings = Settings::default();
-        settings.filters = both();
+        let settings = Settings { filters: both(), ..Default::default() };
         let live = live(settings);
         let mut filters = Filters::default();
         for i in 0..50 {
@@ -363,7 +386,8 @@ mod tests {
 
     #[test]
     fn with_the_filters_off_the_output_is_exactly_the_input() {
-        let positions = [(0.0, 0.0), (1.0, 1.0), (0.1, 0.2), (0.123456789, 0.987654321), (1.0 / 3.0, 2.0 / 3.0), (0.5, 0.5)];
+        let positions =
+            [(0.0, 0.0), (1.0, 1.0), (0.1, 0.2), (0.123456789, 0.987654321), (1.0 / 3.0, 2.0 / 3.0), (0.5, 0.5)];
         let live = live(Settings::default());
         assert!(!live.filters.any_on(), "the filters start off");
         let mut filters = Filters::default();
@@ -449,7 +473,14 @@ mod tests {
                 for smoothing in [MIN_SMOOTHING, 0.5, 0.95, 1.0] {
                     for soft_knee in [0.0, 0.5, 1.0, 10.0, MAX_SOFT_KNEE] {
                         for leak in [0.0, 0.3, 1.0] {
-                            let r = RadialFollow { on: true, outer_radius_mm: outer, inner_radius_mm: inner, smoothing, soft_knee, leak };
+                            let r = RadialFollow {
+                                on: true,
+                                outer_radius_mm: outer,
+                                inner_radius_mm: inner,
+                                smoothing,
+                                soft_knee,
+                                leak,
+                            };
                             let mut previous = 0.0;
                             for step in 0..=2000 {
                                 let d = step as f64 * 0.01;

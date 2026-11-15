@@ -157,7 +157,8 @@ mod tests {
     #[test]
     fn overrides_only_change_what_they_name() {
         let base = &built_in()[0];
-        let changed = ThemeOverrides { outline: Some(Rgb(1, 2, 3)), outside_dim: Some(10), ..Default::default() }.apply(base);
+        let changed =
+            ThemeOverrides { outline: Some(Rgb(1, 2, 3)), outside_dim: Some(10), ..Default::default() }.apply(base);
         assert_eq!(changed.outline, Rgb(1, 2, 3));
         assert_eq!(changed.outside_dim, 10);
         assert_eq!(changed.accent, base.accent);

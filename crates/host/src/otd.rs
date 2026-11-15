@@ -180,7 +180,8 @@ fn is_our_tablet(name: Option<&str>) -> bool {
 /// the new text, or `None` if nothing needed changing. A tool the user turned off stays off.
 pub fn settings_with_tool(existing: Option<&str>) -> Result<Option<String>, String> {
     let mut settings: Value = match existing {
-        Some(text) => serde_json::from_str(text.trim_start_matches('\u{feff}')).map_err(|e| format!("can't read settings: {e}"))?,
+        Some(text) => serde_json::from_str(text.trim_start_matches('\u{feff}'))
+            .map_err(|e| format!("can't read settings: {e}"))?,
         None => json!({ "Profiles": [], "LockUsableAreaDisplay": true, "LockUsableAreaTablet": true }),
     };
     let root = settings.as_object_mut().ok_or("settings aren't an object")?;
@@ -223,7 +224,11 @@ pub struct OtdArea {
 /// output mode is relative, where an area doesn't apply.
 pub fn area_from_settings(text: &str) -> Option<OtdArea> {
     let settings: Value = serde_json::from_str(text.trim_start_matches('\u{feff}')).ok()?;
-    let profile = settings.get("Profiles")?.as_array()?.iter().find(|p| is_our_tablet(p.get("Tablet").and_then(Value::as_str)))?;
+    let profile = settings
+        .get("Profiles")?
+        .as_array()?
+        .iter()
+        .find(|p| is_our_tablet(p.get("Tablet").and_then(Value::as_str)))?;
     let mode = profile.get("OutputMode").and_then(|o| o.get("Path")).and_then(Value::as_str).unwrap_or("");
     if mode.to_lowercase().contains("relative") {
         return None;
@@ -299,7 +304,8 @@ fn names_the_s_pen(text: &str) -> bool {
     let ids = config.get("DigitizerIdentifiers").and_then(Value::as_array);
     ids.is_some_and(|ids| {
         ids.iter().any(|id| {
-            id.get("VendorID").and_then(Value::as_u64) == Some(BRIDGE_VENDOR) && id.get("ProductID").and_then(Value::as_u64) == Some(BRIDGE_PRODUCT)
+            id.get("VendorID").and_then(Value::as_u64) == Some(BRIDGE_VENDOR)
+                && id.get("ProductID").and_then(Value::as_u64) == Some(BRIDGE_PRODUCT)
         })
     })
 }
@@ -335,7 +341,9 @@ pub fn daemon_running() -> bool {
 /// stopped, which happens when it has administrator rights and this program doesn't.
 pub fn stop_daemons() -> bool {
     use windows_sys::Win32::Foundation::CloseHandle;
-    use windows_sys::Win32::System::Threading::{OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, TerminateProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE, PROCESS_TERMINATE,
+    };
     let mut all = true;
     for id in crate::tuning::process_ids(DAEMON) {
         unsafe {
@@ -538,7 +546,9 @@ mod tests {
 
     #[test]
     fn a_profile_under_the_old_name_moves_to_the_new_one() {
-        let before = format!(r#"{{"Profiles":[{{"Tablet":"{OLD_TABLET_NAME}","Custom":1}}],"Tools":[{{"Path":"{TOOL_PATH}","Enable":true}}]}}"#);
+        let before = format!(
+            r#"{{"Profiles":[{{"Tablet":"{OLD_TABLET_NAME}","Custom":1}}],"Tools":[{{"Path":"{TOOL_PATH}","Enable":true}}]}}"#
+        );
         let v: Value = serde_json::from_str(&settings_with_tool(Some(&before)).unwrap().unwrap()).unwrap();
         assert_eq!(v["Profiles"][0]["Tablet"], TABLET_NAME);
         assert_eq!(v["Profiles"][0]["Custom"], 1);
@@ -546,7 +556,9 @@ mod tests {
         let after = serde_json::to_string(&v).unwrap();
         assert_eq!(settings_with_tool(Some(&after)).unwrap(), None);
         // A profile under the new name wins, and the old one is left as it was.
-        let both = format!(r#"{{"Profiles":[{{"Tablet":"{OLD_TABLET_NAME}"}},{{"Tablet":"{TABLET_NAME}"}}],"Tools":[{{"Path":"{TOOL_PATH}"}}]}}"#);
+        let both = format!(
+            r#"{{"Profiles":[{{"Tablet":"{OLD_TABLET_NAME}"}},{{"Tablet":"{TABLET_NAME}"}}],"Tools":[{{"Path":"{TOOL_PATH}"}}]}}"#
+        );
         assert_eq!(settings_with_tool(Some(&both)).unwrap(), None);
     }
 
@@ -578,7 +590,15 @@ mod tests {
     /// OpenTabletDriver's area must land in the middle of the drawn one, held any way.
     #[test]
     fn the_drawn_area_matches_what_opentabletdriver_maps() {
-        let area = OtdArea { width: 100.0, height: 60.0, x: 120.0, y: 80.0, rotation: 0.0, display_width: 2560.0, display_height: 1600.0 };
+        let area = OtdArea {
+            width: 100.0,
+            height: 60.0,
+            x: 120.0,
+            y: 80.0,
+            rotation: 0.0,
+            display_width: 2560.0,
+            display_height: 1600.0,
+        };
         for rotation in [Rotation::R0, Rotation::R90, Rotation::R180, Rotation::R270] {
             let view = area_in_view(&area, rotation).resolve(rotation);
             // Find the sensor position OpenTabletDriver sees at the area's middle.
@@ -634,12 +654,19 @@ mod tests {
         fs::write(configs.join("Wacom CTL-472.json"), wacom).unwrap();
         fs::write(configs.join("broken.json"), "{").unwrap();
 
-        let mut found: Vec<String> = duplicate_configurations(&dir).iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        let mut found: Vec<String> = duplicate_configurations(&dir)
+            .iter()
+            .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+            .collect();
         found.sort();
         assert_eq!(found, ["copy.JSON", "osutab S Pen.json"]);
         remove_duplicate_configurations(&dir).unwrap();
         assert!(duplicate_configurations(&dir).is_empty());
-        assert!(config_path(&dir).exists() && configs.join("Wacom CTL-472.json").exists() && configs.join("broken.json").exists());
+        assert!(
+            config_path(&dir).exists()
+                && configs.join("Wacom CTL-472.json").exists()
+                && configs.join("broken.json").exists()
+        );
         assert!(!configs.join("osutab S Pen.json").exists());
         let _ = fs::remove_dir_all(&dir);
     }
