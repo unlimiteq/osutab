@@ -15,7 +15,7 @@
 
 osu!tab reads the S Pen on the tablet before Android touches it, sends each report over the USB cable, and puts the cursor exactly where the pen is. In my testing that adds about 0.5 ms of latency, under 1 ms for 99% of reports. The pen works about 0.15 s after launch.
 
-It has only been tested on a **Galaxy Tab S8 Ultra** with the S Pen in the box, playing **osu!lazer** on **Windows 11**. If you have another Samsung tablet, or play osu!stable, please try it and [tell me how it went](#help-test-it).
+It has only been tested on a **Galaxy Tab S8 Ultra** with the S Pen in the box, playing **osu!lazer** on **Windows 11**. If you have another Samsung tablet, or play osu!stable, please try it and [tell me how it went](#contributing).
 
 ## Features
 
@@ -33,7 +33,7 @@ It has only been tested on a **Galaxy Tab S8 Ultra** with the S Pen in the box, 
   <img src="docs/images/pen-area.png" width="420" alt="The Pen area page">
 </p>
 
-## Download
+## Installation
 
 Get `osu-tab-1.0.0-windows-x64.zip` from [Releases](https://github.com/unlimiteq/osutab/releases), unzip it anywhere and run `osu!tab.exe`. There's no installer, and no adb.exe or drivers to set up.
 
@@ -41,7 +41,7 @@ You need Windows 11 (64-bit), the tablet and its S Pen, and a USB cable that car
 
 osu!tab isn't code-signed yet, so Windows may say "Windows protected your PC" the first time. Click **More info**, then **Run anyway**. The release has a `.sha256` file if you want to check the download.
 
-## Quick start
+## Usage
 
 1. On the tablet, turn on **USB debugging**: tap Settings > About tablet > Software information > **Build number** seven times, then turn it on in Settings > Developer options. USB debugging gives the connected PC deep access to the tablet, so only allow PCs you trust.
 2. Plug the tablet into the PC and run `osu!tab.exe`. Answer its two questions: how the tablet sits, and how big your pen area should be.
@@ -61,13 +61,13 @@ osu!tab is an input device, like a Wacom driver or OpenTabletDriver. It puts the
 
 See osu!'s [rules](https://osu.ppy.sh/wiki/en/Rules), and ask osu! support if in doubt.
 
-## Help test it
+## Contributing
 
-So far osu!tab has run on one setup, so any report helps, whether it works or not. Open a [compatibility report](https://github.com/unlimiteq/osutab/issues/new?template=compatibility-report.yml) with your tablet model, Android and One UI versions, Windows version and which osu! you play. If you can, attach the latency log (the Latency tab's **Open the logs folder** button finds it). For anything broken, open a [bug report](https://github.com/unlimiteq/osutab/issues/new?template=bug-report.yml).
+So far osu!tab has run on one setup, so any report helps, whether it works or not. Open a [compatibility report](https://github.com/unlimiteq/osutab/issues/new?template=compatibility-report.yml) with your tablet model, Android and One UI versions, Windows version and which osu! you play. If you can, attach the latency log (the Latency tab's **Open the logs folder** button finds it). For anything broken, open a [bug report](https://github.com/unlimiteq/osutab/issues/new?template=bug-report.yml). Code changes are welcome too; see [CONTRIBUTING.md](CONTRIBUTING.md).
 
 osu!tab assumes the S8 Ultra's screen size, so on another tablet the sizes it shows in mm will be off.
 
-## Building from source
+## Building and testing
 
 You'll need [Rust](https://rustup.rs), the [.NET 10 SDK](https://dotnet.microsoft.com/download), Java 21, Gradle 8.11 and the Android SDK (platform 35, build-tools 35). See the [guide](docs/GUIDE.md#building-from-source) for where `build.ps1` looks for them.
 
@@ -75,7 +75,7 @@ You'll need [Rust](https://rustup.rs), the [.NET 10 SDK](https://dotnet.microsof
 rustup target add aarch64-unknown-linux-musl
 .\build.ps1             # builds everything into target\
 .\package.ps1 -Zip      # dist\osu!tab, plus the release zip
-cargo test
+cargo test              # runs the PC program's tests
 ```
 
 `crates/core` is the shared wire format, `crates/helper` runs on the tablet, `crates/host` is the Windows program, `android` is the tablet app and `otd-plugin` is the OpenTabletDriver bridge.
