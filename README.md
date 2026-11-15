@@ -50,7 +50,7 @@ osu!tab isn't code-signed yet, so Windows may say "Windows protected your PC" th
 
 When the Play tab says **Ready to play**, you're set. Closing the window keeps osu!tab in the tray, and **Quit** gives the pen back to Android.
 
-The [guide](docs/GUIDE.md) covers every setting, osu! and Windows settings, the filters, OpenTabletDriver mode, how it works, the full latency numbers and troubleshooting.
+The [guide](docs/GUIDE.md) covers every setting, osu! and Windows settings, the filters, OpenTabletDriver mode, how it works, the full latency numbers, an [FAQ](docs/GUIDE.md#faq) and troubleshooting.
 
 ## Is this allowed in osu!?
 

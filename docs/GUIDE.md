@@ -165,6 +165,35 @@ What has been tested:
 
 What hasn't been tested: the S Pen itself in this mode, and any community plugin. Plugins that only change position through OpenTabletDriver's filter interfaces should work. A plugin that talks to specific tablet hardware or depends on its button layout might not.
 
+## FAQ
+
+**Does the tablet need to be rooted?**
+No. osu!tab uses Android's USB debugging, which any Samsung tablet can turn on in Developer options.
+
+**Does it work without a cable?**
+No, osu!tab only works over USB. A cable keeps the latency low and steady.
+
+**Will it work on my tablet?**
+It's only been tested on a Galaxy Tab S8 Ultra. Other Samsung tablets with an S Pen may well work, but osu!tab assumes the S8 Ultra's screen size, so the sizes it shows in mm will be off. Please [send a compatibility report](https://github.com/unlimiteq/osutab/issues/new?template=compatibility-report.yml) either way.
+
+**Does it work on macOS or Linux?**
+No, the PC side is Windows only.
+
+**Does it work with osu!stable?**
+osu!tab moves the Windows cursor the same way for any game, but osu!stable hasn't been tested yet.
+
+**Can I use the pen on the tablet while osu!tab runs?**
+No. osu!tab holds the pen while it runs. Quit osu!tab to give it back to Android.
+
+**Is it allowed in osu!?**
+See [Is this allowed in osu!?](../README.md#is-this-allowed-in-osu) in the README.
+
+**Why does Windows say it protected my PC?**
+osu!tab isn't code-signed yet. Click **More info**, then **Run anyway**. The release has a `.sha256` file to check the download.
+
+**Do I need OpenTabletDriver?**
+No. Direct output works on its own and has its own filters. OpenTabletDriver mode is there if you want its plugins.
+
 ## Troubleshooting
 
 | Problem | What to do |
