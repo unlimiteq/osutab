@@ -1,0 +1,25 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Rust tests
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Add the tablet's target
+        run: rustup target add aarch64-unknown-linux-musl
+      - uses: Swatinem/rust-cache@v2
+      # The tests build without the tablet helper and app embedded, as a plain cargo build does.
+      - name: Test the PC program
+        run: cargo test --locked
+      - name: Check the tablet helper builds
+        run: cargo check --locked -p osutab-helper --target aarch64-unknown-linux-musl
