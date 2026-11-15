@@ -23,7 +23,8 @@
   <a href="#quick-start">Quick start</a> ·
   <a href="docs/GUIDE.md">Guide</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
-  <a href="#help-test-osutab">Help test it</a>
+  <a href="#help-test-osutab">Help test it</a> ·
+  <a href="#is-this-allowed-in-osu">Is it allowed?</a>
 </p>
 
 <p align="center">
@@ -209,6 +210,15 @@ More, including osu!stable and Windows, is in the [guide](docs/GUIDE.md#osu-sett
 - Android doesn't let an ordinary app block the system bars completely. A swipe from the edge can bring them back for a moment, and **Pin the app** blocks Home and Back. When it pins the app, Android resets the USB connection once. osu!tab reconnects by itself, and a drop that's back within 3 s isn't shown, so the status doesn't flicker.
 - Quitting osu!tab also closes the tablet app.
 - USB debugging gives a connected PC deep access to the tablet, so only allow PCs you trust.
+
+## Is this allowed in osu!?
+
+osu!tab is an input device, like a Wacom driver or OpenTabletDriver. It puts the cursor exactly where the S Pen is, one to one. It doesn't aim, slow the game down or play anything for you.
+
+- **The filters** are the same kind many players already run through OpenTabletDriver, such as radial follow. They only steady the pen's jitter, and they add a little lag rather than helping you aim. They're off by default. osu!'s rules don't mention tablet drivers or filters either way, so leave them off if you'd rather be safe.
+- **The side button** follows the same rule as any keyboard key: one press should be one press of one game key. Binding it to K1 or K2 is fine. Don't bind it to K1 and K2 together, because osu!'s rules don't allow one physical press to send more than one key press. Key combinations are for hotkeys outside gameplay.
+
+The rules themselves are on the osu! wiki: [Rules, "Play fair"](https://osu.ppy.sh/wiki/en/Rules). If in doubt, ask the osu! support team.
 
 ## Troubleshooting
 
