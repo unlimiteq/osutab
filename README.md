@@ -10,7 +10,14 @@
 </p>
 
 <p align="center">
-  <img src="docs/images/play.png" width="720" alt="The osu!tab window saying Ready to play">
+  <a href="https://github.com/unlimiteq/osutab/releases/latest"><img src="https://img.shields.io/badge/Download-1.0.0-ff66aa?style=for-the-badge&logo=windows&logoColor=white" alt="Download osu!tab 1.0.0"></a>
+  <a href="docs/GUIDE.md"><img src="https://img.shields.io/badge/Read-the%20guide-3b82f6?style=for-the-badge&logo=readthedocs&logoColor=white" alt="Read the guide"></a>
+  <a href="https://github.com/unlimiteq/osutab/issues/new?template=compatibility-report.yml"><img src="https://img.shields.io/badge/Report-compatibility-22c55e?style=for-the-badge&logo=samsung&logoColor=white" alt="Send a compatibility report"></a>
+  <a href="https://github.com/unlimiteq/osutab/stargazers"><img src="https://img.shields.io/github/stars/unlimiteq/osutab?style=for-the-badge&logo=github&label=Star&color=f59e0b" alt="Star osu!tab on GitHub"></a>
+</p>
+
+<p align="center">
+  <img src="docs/images/hero.png" width="900" alt="The osu!tab window on the PC, next to the tablet showing the pen area">
 </p>
 
 osu!tab reads the S Pen on the tablet before Android touches it, sends each report over the USB cable, and puts the cursor exactly where the pen is. In my testing that adds about 0.5 ms of latency, under 1 ms for 99% of reports. The pen works about 0.15 s after launch.
@@ -28,10 +35,26 @@ It has only been tested on a **Galaxy Tab S8 Ultra** with the S Pen in the box, 
 - Themes on both the PC and the tablet.
 - An optional OpenTabletDriver mode, if you want its filters and plugins.
 
-<p align="center">
-  <img src="docs/images/tablet.png" width="420" alt="The tablet showing the pen area">
-  <img src="docs/images/pen-area.png" width="420" alt="The Pen area page">
-</p>
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/pen-area.png" alt="The Pen area page"></td>
+    <td width="50%"><img src="docs/images/latency.png" alt="The Latency page with live numbers"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>Pen area</b><br>Size, position, rotation and presets</td>
+    <td align="center"><b>Latency</b><br>Live numbers, stage by stage</td>
+  </tr>
+  <tr>
+    <td width="50%"><img src="docs/images/tablet-edit.png" alt="The tablet in edit mode, with corner handles"></td>
+    <td width="50%"><img src="docs/images/appearance.png" alt="The Appearance page with theme previews"></td>
+  </tr>
+  <tr>
+    <td align="center"><b>On the tablet</b><br>Hold, then move and resize the area with your fingers</td>
+    <td align="center"><b>Themes</b><br>Five built in, or your own colors</td>
+  </tr>
+</table>
 
 ## Installation
 
@@ -67,6 +90,8 @@ So far osu!tab has run on one setup, so any report helps, whether it works or no
 
 osu!tab assumes the S8 Ultra's screen size, so on another tablet the sizes it shows in mm will be off.
 
+What's planned next is on the [1.1.0 roadmap](https://github.com/unlimiteq/osutab/milestone/1). Issues marked [good first issue](https://github.com/unlimiteq/osutab/labels/good%20first%20issue) are a good place to start, and security problems go through [SECURITY.md](SECURITY.md), not a public issue.
+
 ## Building and testing
 
 You'll need [Rust](https://rustup.rs), the [.NET 10 SDK](https://dotnet.microsoft.com/download), Java 21, Gradle 8.11 and the Android SDK (platform 35, build-tools 35). See the [guide](docs/GUIDE.md#building-from-source) for where `build.ps1` looks for them.
@@ -77,6 +102,8 @@ rustup target add aarch64-unknown-linux-musl
 .\package.ps1 -Zip      # dist\osu!tab, plus the release zip
 cargo test              # runs the PC program's tests
 ```
+
+Every push runs the tests, rustfmt, clippy and CodeQL on GitHub Actions.
 
 `crates/core` is the shared wire format, `crates/helper` runs on the tablet, `crates/host` is the Windows program, `android` is the tablet app and `otd-plugin` is the OpenTabletDriver bridge.
 
