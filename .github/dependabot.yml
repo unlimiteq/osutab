@@ -4,6 +4,11 @@ updates:
     directory: /
     schedule:
       interval: monthly
+    # Most of these crates are still 0.x, where a minor version can break the build (egui,
+    # rsa). Those upgrades are done by hand; see issue #11. Patch versions come in here.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     groups:
       cargo:
         patterns: ["*"]
