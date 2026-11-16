@@ -18,13 +18,42 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: [rust, csharp, actions]
+        include:
+          - language: rust
+            build-mode: none
+          - language: csharp
+            build-mode: manual
+          - language: actions
+            build-mode: none
     steps:
       - uses: actions/checkout@v7
+
+      # The C# plugins build against OpenTabletDriver's plugin API, at the commit build.ps1 pins.
+      # It's built before CodeQL starts watching, so only osu!tab's own C# is scanned.
+      - name: Set up .NET
+        if: matrix.language == 'csharp'
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - name: Build OpenTabletDriver's plugin API
+        if: matrix.language == 'csharp'
+        run: |
+          commit=$(grep -oP "otdCommit = '\K[0-9a-f]+" build.ps1)
+          git clone --quiet https://github.com/OpenTabletDriver/OpenTabletDriver.git tools/otd-src
+          git -C tools/otd-src checkout --quiet "$commit"
+          dotnet build tools/otd-src/OpenTabletDriver.Plugin/OpenTabletDriver.Plugin.csproj -c Release
+
       - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
-          build-mode: none
+          build-mode: ${{ matrix.build-mode }}
+
+      - name: Build the plugins
+        if: matrix.language == 'csharp'
+        run: |
+          dotnet build otd-plugin/OsutabBridge.csproj -c Release --no-dependencies
+          dotnet build otd-test-plugin/OsutabTestFilters.csproj -c Release --no-dependencies
+
       - uses: github/codeql-action/analyze@v4
         with:
           category: /language:${{ matrix.language }}
