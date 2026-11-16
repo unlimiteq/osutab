@@ -24,6 +24,8 @@ $env:CARGO_ENCODED_RUSTFLAGS = $helperFlags -join $sep
 cargo build --release -p osutab-helper --target aarch64-unknown-linux-musl
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
+# Gradle copies PATH into the test runner's command line, and a stray quote in PATH splits it.
+$env:Path = $env:Path -replace '"', ''
 if (Test-Path (Join-Path $tools 'jdk21')) { $env:JAVA_HOME = Join-Path $tools 'jdk21' }
 if (Test-Path (Join-Path $tools 'android-sdk')) { $env:ANDROID_HOME = Join-Path $tools 'android-sdk' }
 $gradle = Join-Path $tools 'gradle\bin\gradle.bat'

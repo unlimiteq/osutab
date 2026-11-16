@@ -94,7 +94,7 @@ What's planned next is on the [1.1.0 roadmap](https://github.com/unlimiteq/osuta
 
 ## Building and testing
 
-You'll need [Rust](https://rustup.rs), the [.NET 10 SDK](https://dotnet.microsoft.com/download), Java 21, Gradle 8.11 and the Android SDK (platform 35, build-tools 35). See the [guide](docs/GUIDE.md#building-from-source) for where `build.ps1` looks for them.
+You'll need [Rust](https://rustup.rs), the [.NET 10 SDK](https://dotnet.microsoft.com/download), Java 21, Gradle 9.6 and the Android SDK (platform 35, build-tools 36). See the [guide](docs/GUIDE.md#building-from-source) for where `build.ps1` looks for them.
 
 ```powershell
 rustup target add aarch64-unknown-linux-musl

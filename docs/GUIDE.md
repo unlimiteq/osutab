@@ -263,7 +263,7 @@ Settings are in `%APPDATA%\osu!tab\config.toml`. Versions before the rename kept
 
 ## Building from source
 
-You'll need [Rust](https://rustup.rs) and the .NET 10 SDK. The tablet app needs Java 21, Gradle 8.11 and the Android SDK (platform 35, build-tools 35). `build.ps1` looks for them in `tools\jdk21`, `tools\gradle` and `tools\android-sdk`, and fetches OpenTabletDriver's source at commit `f3927ac` into `tools\otd-src`. Google's platform-tools in `tools\platform-tools` are optional, for the `adb` USB path.
+You'll need [Rust](https://rustup.rs) and the .NET 10 SDK. The tablet app needs Java 21, Gradle 9.6 and the Android SDK (platform 35, build-tools 36). `build.ps1` looks for them in `tools\jdk21`, `tools\gradle` and `tools\android-sdk`, and fetches OpenTabletDriver's source at commit `f3927ac` into `tools\otd-src`. Google's platform-tools in `tools\platform-tools` are optional, for the `adb` USB path.
 
 ```powershell
 rustup target add aarch64-unknown-linux-musl

@@ -1,12 +1,10 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 android {
     namespace = "dev.osutab.app"
     compileSdk = 35
-    buildToolsVersion = "35.0.0"
 
     defaultConfig {
         applicationId = "dev.osutab.app"
@@ -30,9 +28,6 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
     testOptions {
         unitTests.isReturnDefaultValues = true
     }
@@ -40,4 +35,10 @@ android {
 
 dependencies {
     testImplementation("junit:junit:4.13.2")
+}
+
+kotlin {
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
