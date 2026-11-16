@@ -32,7 +32,7 @@ jobs:
       # It's built before CodeQL starts watching, so only osu!tab's own C# is scanned.
       - name: Set up .NET
         if: matrix.language == 'csharp'
-        uses: actions/setup-dotnet@v4
+        uses: actions/setup-dotnet@v6
         with:
           dotnet-version: 10.0.x
       - name: Build OpenTabletDriver's plugin API
