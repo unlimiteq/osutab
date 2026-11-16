@@ -11,6 +11,16 @@ $env:UseSharedCompilation = 'false'
 $tools = Join-Path $PSScriptRoot 'tools'
 $otdCommit = 'f3927ac11146cb7dd5c3b43277d5d1e33e36f6d6'
 
+# Compilers record where each source file was, which would put this PC's user folder in the
+# programs. These flags write ~ and . instead. They go in CARGO_ENCODED_RUSTFLAGS because the
+# folders can have spaces, and that replaces .cargo\config.toml's flags, so the helper repeats them.
+$remap = @("--remap-path-prefix=$env:USERPROFILE=~", "--remap-path-prefix=$PSScriptRoot=.")
+$sep = [string][char]0x1f
+$helperFlags = @('-C', 'target-feature=+crt-static', '-C', 'link-self-contained=yes') + $remap
+# .NET's builds map source folders the same way when they're marked as a CI build.
+$dotnetPaths = @('-p:ContinuousIntegrationBuild=true', '-p:Deterministic=true')
+
+$env:CARGO_ENCODED_RUSTFLAGS = $helperFlags -join $sep
 cargo build --release -p osutab-helper --target aarch64-unknown-linux-musl
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -28,13 +38,14 @@ if (-not (Test-Path $otdSrc)) {
   git -C $otdSrc checkout $otdCommit
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
-dotnet build (Join-Path $PSScriptRoot 'otd-plugin\OsutabBridge.csproj') -c Release -v q --nologo
+dotnet build (Join-Path $PSScriptRoot 'otd-plugin\OsutabBridge.csproj') -c Release -v q --nologo @dotnetPaths
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 $otdOut = Join-Path $PSScriptRoot 'target\otd'
 foreach ($project in 'OpenTabletDriver.Daemon', 'OpenTabletDriver.UX.Wpf') {
-  dotnet publish (Join-Path $otdSrc "$project\$project.csproj") -c Release -o $otdOut -v q --nologo
+  dotnet publish (Join-Path $otdSrc "$project\$project.csproj") -c Release -o $otdOut -v q --nologo @dotnetPaths
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 }
 
+$env:CARGO_ENCODED_RUSTFLAGS = $remap -join $sep
 cargo build --release -p osutab-host
 if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
